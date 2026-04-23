@@ -65,11 +65,18 @@ jobs:
         run: |
           flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
+      - name: Find IPA
+        run: |
+          echo "=== build/ios/ contents ==="
+          find build/ios -name "*.ipa" 2>/dev/null || echo "No IPA in build/ios"
+          find build -name "*.ipa" 2>/dev/null || echo "No IPA in build"
+          find . -name "*.ipa" -not -path "./.git/*" 2>/dev/null || echo "No IPA anywhere"
+
       - name: Upload to TestFlight
         run: |
           mkdir -p ~/.appstoreconnect/private_keys
           echo "${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}" > ~/.appstoreconnect/private_keys/AuthKey_${{ secrets.APP_STORE_CONNECT_KEY_ID }}.p8
-          IPA_PATH=$(find build/ios/ipa -name "*.ipa" | head -1)
+          IPA_PATH=$(find . -name "*.ipa" -not -path "./.git/*" | head -1)
           echo "Uploading: $IPA_PATH"
           xcrun altool --upload-app \
             --file "$IPA_PATH" \
