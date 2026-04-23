@@ -1,0 +1,53 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "health",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "animalId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "vaccines",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "animalId", "order": "ASCENDING" },
+        { "fieldPath": "nextVaccineDate", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "milking",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "animalId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "finance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "type", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "feed_transactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "stockId", "order": "ASCENDING" },
+        { "fieldPath": "date", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "calves",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "birthDate", "order": "ASCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

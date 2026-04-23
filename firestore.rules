@@ -1,0 +1,96 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ─── Yardımcı fonksiyonlar ────────────────────────────────────────────────
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function currentUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function belongsToFarm(farmId) {
+      return isAuthenticated() &&
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+             currentUserDoc().farmId == farmId &&
+             currentUserDoc().isActive == true;
+    }
+
+    function isOwnerOrPartner(farmId) {
+      return belongsToFarm(farmId) &&
+             (currentUserDoc().role == 'owner' || currentUserDoc().role == 'partner');
+    }
+
+    // ─── Kullanıcılar ─────────────────────────────────────────────────────────
+    match /users/{userId} {
+      // Herkes kendi kaydını okuyabilir
+      allow read: if isAuthenticated() && request.auth.uid == userId;
+      // Kendi kaydını sadece owner/partner güncelleyebilir (inviteUser)
+      allow write: if isAuthenticated() &&
+                     (request.auth.uid == userId ||
+                      (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+                       (currentUserDoc().role == 'owner' || currentUserDoc().role == 'partner')));
+    }
+
+    // ─── Çiftlikler ───────────────────────────────────────────────────────────
+    match /farms/{farmId} {
+      // İlk kayıt: kimliği doğrulanmış kullanıcı kendi UID'siyle yeni çiftlik oluşturabilir
+      allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
+      allow read, update, delete: if belongsToFarm(farmId);
+
+      // Hayvanlar
+      match /animals/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Buzağılar
+      match /calves/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Süt kayıtları
+      match /milking/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Toplu sağım
+      match /bulk_milking/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Sağlık
+      match /health/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Aşılar
+      match /vaccines/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Finans — sadece owner/partner görebilir
+      match /finance/{docId} {
+        allow read, write: if isOwnerOrPartner(farmId);
+      }
+      // Yem stokları
+      match /feed_stock/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Yem hareketleri
+      match /feed_transactions/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Ekipmanlar
+      match /equipment/{docId} {
+        allow read, write: if belongsToFarm(farmId);
+      }
+      // Personel — sadece owner/partner
+      match /staff/{docId} {
+        allow read, write: if isOwnerOrPartner(farmId);
+      }
+    }
+
+    // ─── Geri Bildirimler ─────────────────────────────────────────────────────
+    match /feedback/{docId} {
+      allow create: if isAuthenticated();
+      allow read, update, delete: if false; // Sadece Firebase Console
+    }
+  }
+}
