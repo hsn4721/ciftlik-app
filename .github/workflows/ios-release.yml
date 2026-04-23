@@ -37,34 +37,38 @@ jobs:
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo "${{ secrets.PROVISIONING_PROFILE_BASE64 }}" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
 
-      - name: Set Team ID in ExportOptions
+      - name: Configure Xcode signing (Runner target only)
         run: |
-          sed -i '' 's/TEAM_ID_PLACEHOLDER/${{ secrets.APPLE_TEAM_ID }}/g' ios/ExportOptions.plist
+          ruby - <<'EOF'
+          require 'xcodeproj'
+          project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
+          project.targets.each do |target|
+            next unless target.name == 'Runner'
+            target.build_configurations.each do |config|
+              next unless config.name == 'Release'
+              config.build_settings['CODE_SIGN_STYLE'] = 'Manual'
+              config.build_settings['CODE_SIGN_IDENTITY'] = 'iPhone Distribution'
+              config.build_settings['PROVISIONING_PROFILE_SPECIFIER'] = 'CiftlikPRO AppStore'
+              config.build_settings['DEVELOPMENT_TEAM'] = ENV['APPLE_TEAM_ID']
+            end
+          end
+          project.save
+          EOF
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
 
-      - name: Flutter build iOS
-        run: flutter build ios --release --no-codesign
-
-      - name: Archive & Export IPA
+      - name: Update ExportOptions with Team ID
         run: |
-          xcodebuild -workspace ios/Runner.xcworkspace \
-            -scheme Runner \
-            -configuration Release \
-            -archivePath $RUNNER_TEMP/Runner.xcarchive \
-            archive \
-            CODE_SIGN_STYLE=Manual \
-            CODE_SIGN_IDENTITY="iPhone Distribution" \
-            PROVISIONING_PROFILE_SPECIFIER="CiftlikPRO AppStore" \
-            DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }}
+          sed -i '' "s/TEAM_ID_PLACEHOLDER/${{ secrets.APPLE_TEAM_ID }}/g" ios/ExportOptions.plist
 
-          xcodebuild -exportArchive \
-            -archivePath $RUNNER_TEMP/Runner.xcarchive \
-            -exportOptionsPlist ios/ExportOptions.plist \
-            -exportPath $RUNNER_TEMP/ipa
+      - name: Flutter build IPA
+        run: |
+          flutter build ipa --release --export-options-plist=ios/ExportOptions.plist
 
       - name: Upload to TestFlight
         uses: apple-actions/upload-testflight-build@v1
         with:
-          app-path: ${{ runner.temp }}/ipa/Runner.ipa
+          app-path: build/ios/ipa/*.ipa
           issuer-id: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
           api-key-id: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
           api-private-key: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
