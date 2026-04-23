@@ -13,7 +13,7 @@ workflows:
         BUNDLE_ID: com.ciftlikpro.app
         XCODE_SCHEME: Runner
         XCODE_WORKSPACE: ios/Runner.xcworkspace
-        APP_STORE_APP_ID: "" # App Store Connect'te oluştururken aldığın Apple ID (sayı)
+        APP_STORE_APP_ID: "6763178741"
       flutter: stable
       xcode: latest
       cocoapods: default
