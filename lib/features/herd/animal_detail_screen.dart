@@ -1,6 +1,7 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/services/auth_service.dart';
 import '../../data/models/animal_model.dart';
 import '../../data/repositories/animal_repository.dart';
 import '../milk/milk_screen.dart';
@@ -32,14 +33,18 @@ class AnimalDetailScreen extends StatelessWidget {
             pinned: true,
             backgroundColor: AppColors.primaryGreen,
             actions: [
-              IconButton(
-                icon: const Icon(Icons.edit, color: Colors.white),
-                onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AddAnimalScreen(animal: animal))),
-              ),
-              IconButton(
-                icon: const Icon(Icons.delete_outline, color: Colors.white),
-                onPressed: () => _confirmDelete(context),
-              ),
+              // Sadece Ana Sahip + Yardımcı düzenleyebilir/silebilir.
+              // Vet, worker, partner hayvan kartını değiştiremez.
+              if (AuthService.instance.currentUser?.canEditAnimal ?? true)
+                IconButton(
+                  icon: const Icon(Icons.edit, color: Colors.white),
+                  onPressed: () => Navigator.push(context, MaterialPageRoute(builder: (_) => AddAnimalScreen(animal: animal))),
+                ),
+              if (AuthService.instance.currentUser?.canRemoveAnimal ?? true)
+                IconButton(
+                  icon: const Icon(Icons.delete_outline, color: Colors.white),
+                  onPressed: () => _confirmDelete(context),
+                ),
             ],
             flexibleSpace: FlexibleSpaceBar(
               background: Container(
@@ -73,7 +78,7 @@ class AnimalDetailScreen extends StatelessWidget {
                                 : Container(
                                     padding: const EdgeInsets.all(14),
                                     decoration: BoxDecoration(
-                                      color: Colors.white.withOpacity(0.2),
+                                      color: Colors.white.withValues(alpha: 0.2),
                                       borderRadius: BorderRadius.circular(16),
                                     ),
                                     child: const Icon(Icons.pets, color: Colors.white, size: 32),
@@ -135,25 +140,37 @@ class AnimalDetailScreen extends StatelessWidget {
                     ]),
                   ],
                   const SizedBox(height: 16),
-                  // Hızlı işlemler
-                  Row(
-                    children: [
-                      Expanded(child: _ActionButton(
-                        label: 'Sağım Gir', icon: Icons.water_drop, color: AppColors.infoBlue,
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MilkScreen())),
-                      )),
-                      const SizedBox(width: 10),
-                      Expanded(child: _ActionButton(
-                        label: 'Sağlık Kaydı', icon: Icons.favorite, color: AppColors.errorRed,
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HealthScreen())),
-                      )),
-                      const SizedBox(width: 10),
-                      Expanded(child: _ActionButton(
-                        label: 'Aşı Ekle', icon: Icons.vaccines, color: AppColors.primaryGreen,
-                        onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HealthScreen())),
-                      )),
-                    ],
-                  ),
+                  // Hızlı işlemler — rol bazlı filtrelenir
+                  Builder(builder: (context) {
+                    final u = AuthService.instance.currentUser;
+                    final buttons = <Widget>[
+                      // Sağım Gir yalnızca sağım yetkisi olana (worker + owner + assistant)
+                      if (u?.canAddMilking ?? true)
+                        Expanded(child: _ActionButton(
+                          label: 'Sağım Gir', icon: Icons.water_drop, color: AppColors.infoBlue,
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const MilkScreen())),
+                        )),
+                      if (u?.canManageHealth ?? true)
+                        Expanded(child: _ActionButton(
+                          label: 'Sağlık Kaydı', icon: Icons.favorite, color: AppColors.errorRed,
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HealthScreen())),
+                        )),
+                      if (u?.canManageHealth ?? true)
+                        Expanded(child: _ActionButton(
+                          label: 'Aşı Ekle', icon: Icons.vaccines, color: AppColors.primaryGreen,
+                          onTap: () => Navigator.push(context, MaterialPageRoute(builder: (_) => const HealthScreen())),
+                        )),
+                    ];
+                    if (buttons.isEmpty) return const SizedBox.shrink();
+                    return Row(
+                      children: [
+                        for (int i = 0; i < buttons.length; i++) ...[
+                          if (i > 0) const SizedBox(width: 10),
+                          buttons[i],
+                        ],
+                      ],
+                    );
+                  }),
                   const SizedBox(height: 32),
                 ],
               ),
@@ -197,7 +214,7 @@ class _InfoCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -251,9 +268,9 @@ class _ActionButton extends StatelessWidget {
       child: Container(
         padding: const EdgeInsets.symmetric(vertical: 14),
         decoration: BoxDecoration(
-          color: color.withOpacity(0.1),
+          color: color.withValues(alpha: 0.1),
           borderRadius: BorderRadius.circular(12),
-          border: Border.all(color: color.withOpacity(0.3)),
+          border: Border.all(color: color.withValues(alpha: 0.3)),
         ),
         child: Column(
           children: [

@@ -1,13 +1,13 @@
 import '../local/database_helper.dart';
 import '../models/feed_model.dart';
-import '../models/finance_model.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/services/activity_logger.dart';
 import '../../core/services/notification_service.dart';
-import 'finance_repository.dart';
+import '../../core/services/finance_linker.dart';
 
 class FeedRepository {
   final _db = DatabaseHelper.instance;
-  final _financeRepo = FinanceRepository();
+  final _linker = FinanceLinker.instance;
 
   // ─── Stok ────────────────────────────────────────────────────────────────
 
@@ -33,22 +33,30 @@ class FeedRepository {
       resultId = await db.insert('feed_stock', f.toMap()..remove('id'));
     }
 
-    // Miktar > 0 ve birim fiyat girilmişse → finansa otomatik alım gideri
+    // Miktar > 0 ve birim fiyat girilmişse → finansa otomatik alım gideri.
+    // Her ekleme ayrı bir satın alma olayı — sourceRef benzersiz (stockId+timestamp).
     if (f.quantity > 0 && f.unitPrice != null) {
       final total = f.quantity * f.unitPrice!;
       if (total > 0) {
-        try {
-          await _financeRepo.insert(FinanceModel(
-            type: AppConstants.expense,
-            category: AppConstants.expenseFeed,
-            amount: total,
-            date: today,
-            description: '${f.name} alımı — ${f.quantity.toStringAsFixed(1)} ${f.unit}',
-            notes: 'Otomatik - Yem Modülü',
-            createdAt: now,
-          ));
-        } catch (_) {}
+        await _linker.link(
+          source: AppConstants.srcFeedPurchase,
+          sourceRef: 'feed_stock_add:$resultId:$now',
+          type: AppConstants.expense,
+          category: AppConstants.expenseFeed,
+          amount: total,
+          date: today,
+          description: '${f.name} alımı — ${f.quantity.toStringAsFixed(1)} ${f.unit}',
+          notes: 'Otomatik - Yem Modülü',
+        );
       }
+    }
+
+    if (f.quantity > 0) {
+      ActivityLogger.instance.log(
+        actionType: AppConstants.activityFeedStockAdded,
+        description: 'Yem stoğu: ${f.name} · ${f.quantity.toStringAsFixed(1)} ${f.unit} eklendi',
+        relatedRef: 'feed_stock:$resultId',
+      );
     }
 
     return resultId;
@@ -67,6 +75,14 @@ class FeedRepository {
 
   Future<int> deleteStock(int id) async {
     final db = await _db.database;
+    // Stoğa bağlı tüm finans kayıtlarını temizle
+    await _linker.unlinkByPrefix('feed_stock_add:$id:');
+    // Bu stoğa ait transaction'ların finans kayıtlarını temizle
+    final txs = await db.query('feed_transactions',
+        columns: ['id'], where: 'stockId = ?', whereArgs: [id]);
+    final txRefs = txs.map((t) => 'feed_transactions:${t['id']}').toList();
+    await _linker.unlinkAll(txRefs);
+
     await db.delete('feed_plans', where: 'stockId = ?', whereArgs: [id]);
     await db.delete('feed_transactions', where: 'stockId = ?', whereArgs: [id]);
     return await db.delete('feed_stock', where: 'id = ?', whereArgs: [id]);
@@ -84,7 +100,6 @@ class FeedRepository {
       final newQty = t.isEntry ? current + t.quantity : current - t.quantity;
       final finalQty = newQty < 0 ? 0.0 : newQty;
       final updateMap = {'quantity': finalQty, 'updatedAt': DateTime.now().toIso8601String()};
-      // Alış fiyatı varsa stoğa kaydet
       if (t.isEntry && t.unitPrice != null) updateMap['unitPrice'] = t.unitPrice!;
       await db.update('feed_stock', updateMap, where: 'id = ?', whereArgs: [t.stockId]);
       final minQty = (stock.first['minQuantity'] as num?)?.toDouble() ?? 0;
@@ -93,21 +108,20 @@ class FeedRepository {
       }
     }
 
-    // Alım işlemi ve birim fiyat girilmişse → finansa otomatik gider
+    // Alım işlemi + birim fiyat → finansa otomatik gider
     if (t.isEntry && t.unitPrice != null) {
       final total = t.quantity * t.unitPrice!;
       if (total > 0) {
-        try {
-          await _financeRepo.insert(FinanceModel(
-            type: AppConstants.expense,
-            category: AppConstants.expenseFeed,
-            amount: total,
-            date: t.date,
-            description: '${t.stockName} alımı — ${t.quantity.toStringAsFixed(1)} ${t.unit}',
-            notes: 'Otomatik - Yem Modülü',
-            createdAt: DateTime.now().toIso8601String(),
-          ));
-        } catch (_) {}
+        await _linker.link(
+          source: AppConstants.srcFeedPurchase,
+          sourceRef: 'feed_transactions:$id',
+          type: AppConstants.expense,
+          category: AppConstants.expenseFeed,
+          amount: total,
+          date: t.date,
+          description: '${t.stockName} alımı — ${t.quantity.toStringAsFixed(1)} ${t.unit}',
+          notes: 'Otomatik - Yem Modülü',
+        );
       }
     }
 
@@ -136,6 +150,7 @@ class FeedRepository {
 
   Future<int> deleteTransaction(int id) async {
     final db = await _db.database;
+    await _linker.unlink('feed_transactions:$id');
     return await db.delete('feed_transactions', where: 'id = ?', whereArgs: [id]);
   }
 
@@ -188,7 +203,6 @@ class FeedRepository {
     final db = await _db.database;
     final today = DateTime.now().toIso8601String().split('T').first;
 
-    // Bugün aynı oturum zaten yapılmış mı?
     final existing = await db.query('feed_sessions',
       where: 'date = ? AND session = ?', whereArgs: [today, session]);
     if (existing.isNotEmpty) return '$session yemi bugün zaten verildi';
@@ -204,7 +218,6 @@ class FeedRepository {
       final amount = isMorning ? plan.morningAmount : plan.eveningAmount;
       if (amount <= 0) continue;
 
-      // Stoku kontrol et
       final stocks = await db.query('feed_stock', where: 'id = ?', whereArgs: [plan.stockId]);
       if (stocks.isEmpty) continue;
       final stock = stocks.first;
@@ -216,7 +229,6 @@ class FeedRepository {
         {'quantity': newQty, 'updatedAt': now},
         where: 'id = ?', whereArgs: [plan.stockId]);
 
-      // İşlem kaydı
       await db.insert('feed_transactions', {
         'stockId': plan.stockId,
         'transactionType': '$session Yemi',
@@ -230,7 +242,6 @@ class FeedRepository {
 
       if (unitPrice != null) totalCost += amount * unitPrice;
 
-      // Düşük stok uyarısı
       final minQty = stock['minQuantity'] != null ? (stock['minQuantity'] as num).toDouble() : 0.0;
       if (newQty <= minQty) {
         await NotificationService.instance.showLowStockAlert(plan.stockName);
@@ -238,7 +249,7 @@ class FeedRepository {
     }
 
     // Oturum kaydı
-    await db.insert('feed_sessions', {
+    final sessionId = await db.insert('feed_sessions', {
       'date': today,
       'session': session,
       'totalCost': totalCost > 0 ? totalCost : null,
@@ -246,23 +257,23 @@ class FeedRepository {
       'createdAt': now,
     });
 
-    // Günlük yem maliyeti → finansa period='daily' olarak kaydedilir (aylık özete dahil olmaz)
+    // Günlük yem maliyeti → period='daily', source='feed_daily'.
+    // Yeni UI bu kayıtları aylık toplamda da gösterir (çift saymadan).
     if (totalCost > 0) {
-      try {
-        await _financeRepo.insert(FinanceModel(
-          type: AppConstants.expense,
-          category: AppConstants.expenseFeed,
-          amount: totalCost,
-          date: today,
-          period: 'daily',
-          description: '$session yemi — ${plans.where((p) => (isMorning ? p.morningAmount : p.eveningAmount) > 0).length} çeşit',
-          notes: 'Otomatik - Yem Modülü',
-          createdAt: now,
-        ));
-      } catch (_) {}
+      await _linker.link(
+        source: AppConstants.srcFeedDaily,
+        sourceRef: 'feed_sessions:$sessionId',
+        type: AppConstants.expense,
+        category: AppConstants.expenseFeed,
+        amount: totalCost,
+        date: today,
+        period: 'daily',
+        description: '$session yemi — ${plans.where((p) => (isMorning ? p.morningAmount : p.eveningAmount) > 0).length} çeşit',
+        notes: 'Otomatik - Yem Modülü',
+      );
     }
 
-    return null; // başarılı
+    return null;
   }
 
   /// Özel miktarlarla yemleme uygula (günlük düzenleme desteği)
@@ -321,7 +332,7 @@ class FeedRepository {
       }
     }
 
-    await db.insert('feed_sessions', {
+    final sessionId = await db.insert('feed_sessions', {
       'date': today,
       'session': session,
       'totalCost': totalCost > 0 ? totalCost : null,
@@ -330,18 +341,17 @@ class FeedRepository {
     });
 
     if (totalCost > 0) {
-      try {
-        await _financeRepo.insert(FinanceModel(
-          type: AppConstants.expense,
-          category: AppConstants.expenseFeed,
-          amount: totalCost,
-          date: today,
-          period: 'daily',
-          description: '$session yemi — ${amounts.entries.where((e) => e.value > 0).length} çeşit',
-          notes: 'Otomatik - Yem Modülü',
-          createdAt: now,
-        ));
-      } catch (_) {}
+      await _linker.link(
+        source: AppConstants.srcFeedDaily,
+        sourceRef: 'feed_sessions:$sessionId',
+        type: AppConstants.expense,
+        category: AppConstants.expenseFeed,
+        amount: totalCost,
+        date: today,
+        period: 'daily',
+        description: '$session yemi — ${amounts.entries.where((e) => e.value > 0).length} çeşit',
+        notes: 'Otomatik - Yem Modülü',
+      );
     }
 
     return null;

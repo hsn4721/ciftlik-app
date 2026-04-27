@@ -1,4 +1,4 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
@@ -335,9 +335,9 @@ class _AddAnimalScreenState extends State<AddAnimalScreen> {
                           height: 56,
                           width: 52,
                           decoration: BoxDecoration(
-                            color: AppColors.primaryGreen.withOpacity(0.1),
+                            color: AppColors.primaryGreen.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: AppColors.primaryGreen.withOpacity(0.4)),
+                            border: Border.all(color: AppColors.primaryGreen.withValues(alpha: 0.4)),
                           ),
                           child: const Icon(Icons.qr_code_scanner, color: AppColors.primaryGreen, size: 26),
                         ),
@@ -469,7 +469,7 @@ class _AddAnimalScreenState extends State<AddAnimalScreen> {
     required void Function(String?) onChanged,
   }) {
     return DropdownButtonFormField<String>(
-      value: value,
+        initialValue: value,
       onChanged: onChanged,
       decoration: InputDecoration(
         labelText: label,
@@ -504,7 +504,7 @@ class _PhotoSection extends StatelessWidget {
                   color: photoPath != null ? AppColors.primaryGreen : AppColors.divider,
                   width: photoPath != null ? 2.5 : 1.5,
                 ),
-                boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.1), blurRadius: 10, offset: const Offset(0, 3))],
+                boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.1), blurRadius: 10, offset: const Offset(0, 3))],
               ),
               clipBehavior: Clip.antiAlias,
               child: photoPath != null
@@ -512,7 +512,7 @@ class _PhotoSection extends StatelessWidget {
                   : Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.add_a_photo_outlined, color: AppColors.primaryGreen.withOpacity(0.7), size: 28),
+                        Icon(Icons.add_a_photo_outlined, color: AppColors.primaryGreen.withValues(alpha: 0.7), size: 28),
                         const SizedBox(height: 5),
                         const Text('Fotoğraf\nEkle', textAlign: TextAlign.center,
                             style: TextStyle(fontSize: 10, color: AppColors.textGrey, height: 1.3)),
@@ -629,7 +629,7 @@ class _SectionCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(16),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,

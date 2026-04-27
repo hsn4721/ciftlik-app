@@ -1,5 +1,7 @@
 import '../local/database_helper.dart';
 import '../models/bulk_milking_model.dart';
+import '../../core/constants/app_constants.dart';
+import '../../core/services/activity_logger.dart';
 import 'tank_repository.dart';
 
 class BulkMilkingRepository {
@@ -11,6 +13,11 @@ class BulkMilkingRepository {
     final map = m.toMap()..remove('id');
     final id = await db.insert('bulk_milking', map);
     await _tank.addBulkMilking(m.totalAmount, notes: '${m.session} sağım', date: m.date);
+    ActivityLogger.instance.log(
+      actionType: AppConstants.activityMilkingAdded,
+      description: 'Toplu sağım: ${m.totalAmount.toStringAsFixed(1)} L · ${m.session} · ${m.animalCount} hayvan',
+      relatedRef: 'bulk_milking:$id',
+    );
     return id;
   }
 

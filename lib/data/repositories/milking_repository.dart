@@ -1,5 +1,7 @@
 import '../local/database_helper.dart';
 import '../models/milking_model.dart';
+import '../../core/constants/app_constants.dart';
+import '../../core/services/activity_logger.dart';
 import 'tank_repository.dart';
 
 class MilkingRepository {
@@ -11,6 +13,11 @@ class MilkingRepository {
     final map = m.toMap()..remove('id');
     final id = await db.insert('milking', map);
     await _tank.addMilking(m.amount, notes: m.animalName, date: m.date);
+    ActivityLogger.instance.log(
+      actionType: AppConstants.activityMilkingAdded,
+      description: 'Sağım kaydı: ${m.animalName} · ${m.amount.toStringAsFixed(1)} L · ${m.session}',
+      relatedRef: 'milking:$id',
+    );
     return id;
   }
 

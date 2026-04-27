@@ -1,5 +1,7 @@
+﻿import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
+import '../../core/services/auth_service.dart';
 import '../../core/theme/app_theme.dart';
 import '../../shared/widgets/module_header.dart';
 import '../../core/constants/app_constants.dart';
@@ -9,6 +11,10 @@ import '../../data/models/animal_model.dart';
 import '../../data/repositories/calf_repository.dart';
 import '../../data/repositories/animal_repository.dart';
 import '../../shared/widgets/empty_state.dart';
+import '../../shared/widgets/skeleton_loader.dart';
+import '../../core/subscription/feature_gate.dart';
+import '../../core/subscription/subscription_constants.dart';
+import 'pregnancy_calendar_screen.dart';
 
 class CalfScreen extends StatefulWidget {
   const CalfScreen({super.key});
@@ -50,7 +56,8 @@ class _CalfScreenState extends State<CalfScreen> with SingleTickerProviderStateM
         _breedings = breedings;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[CalfScreen._load] $e\n$st');
       setState(() => _loading = false);
     }
   }
@@ -136,26 +143,45 @@ class _CalfScreenState extends State<CalfScreen> with SingleTickerProviderStateM
                 padding: EdgeInsets.zero,
               ),
             ),
+          IconButton(
+            icon: const Icon(Icons.calendar_month),
+            tooltip: 'Gebelik Takvimi',
+            onPressed: () async {
+              if (!await FeatureGate.requireAccess(
+                context, SubscriptionPlan.pro,
+                featureName: 'Gebelik Takvimi',
+                reason: 'Görsel takvim ile gebelik ve doğum takibi Pro pakettedir.',
+              )) return;
+              if (!mounted) return;
+              await Navigator.push(context, MaterialPageRoute(
+                  builder: (_) => const PregnancyCalendarScreen()));
+              _load();
+            },
+          ),
         ],
         bottom: TabBar(
           controller: _tab,
           tabs: const [Tab(text: 'Buzağılar'), Tab(text: 'Üreme Takibi')],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _tab.index == 0 ? _addCalf : _addBreeding,
-        backgroundColor: AppColors.primaryGreen,
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: Text(
-          _tab.index == 0 ? 'Buzağı Ekle' : 'Tohumlama Ekle',
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-        ),
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final u = AuthService.instance.currentUser;
+        if (u != null && !u.canManageCalves) return const SizedBox.shrink();
+        return FloatingActionButton.extended(
+          onPressed: _tab.index == 0 ? _addCalf : _addBreeding,
+          backgroundColor: AppColors.primaryGreen,
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: Text(
+            _tab.index == 0 ? 'Buzağı Ekle' : 'Tohumlama Ekle',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+        );
+      }),
       body: Stack(
         children: [
           const ModuleBackground(pattern: ModulePattern.calf),
           _loading
-              ? const Center(child: CircularProgressIndicator(color: AppColors.primaryGreen))
+              ? const SkeletonList(itemCount: 6, itemHeight: 80)
               : RefreshIndicator(
                   color: AppColors.primaryGreen,
                   onRefresh: _load,
@@ -236,7 +262,7 @@ class _SectionHeader extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      color: color.withOpacity(0.08),
+      color: color.withValues(alpha: 0.08),
       child: Text(title, style: TextStyle(fontWeight: FontWeight.w700, color: color, fontSize: 13)),
     );
   }
@@ -256,11 +282,11 @@ class _CalfCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
         border: Border(left: BorderSide(color: isMale ? AppColors.infoBlue : Colors.pink.shade300, width: 4)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)],
       ),
       child: ListTile(
         leading: CircleAvatar(
-          backgroundColor: isMale ? AppColors.infoBlue.withOpacity(0.1) : Colors.pink.shade50,
+          backgroundColor: isMale ? AppColors.infoBlue.withValues(alpha: 0.1) : Colors.pink.shade50,
           child: Text(isMale ? '♂' : '♀', style: TextStyle(color: isMale ? AppColors.infoBlue : Colors.pink.shade400, fontSize: 18)),
         ),
         title: Text(calf.earTag, style: const TextStyle(fontWeight: FontWeight.w700)),
@@ -352,7 +378,7 @@ class _BreedingCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(10),
         border: Border(left: BorderSide(color: highlight ? AppColors.gold : color, width: 4)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)],
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -366,7 +392,7 @@ class _BreedingCard extends StatelessWidget {
             ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+              decoration: BoxDecoration(color: color.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
               child: Text(breeding.status, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 12)),
             ),
             const SizedBox(width: 4),
@@ -485,7 +511,7 @@ class _AddCalfScreenState extends State<AddCalfScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _gender,
+        initialValue: _gender,
                     decoration: const InputDecoration(labelText: 'Cinsiyet'),
                     items: [AppConstants.female, AppConstants.male]
                         .map((g) => DropdownMenuItem(value: g, child: Text(g))).toList(),
@@ -493,7 +519,7 @@ class _AddCalfScreenState extends State<AddCalfScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _status,
+        initialValue: _status,
                     decoration: const InputDecoration(labelText: 'Durum'),
                     items: [AppConstants.calfHealthy, AppConstants.calfSick, AppConstants.calfWeaned, AppConstants.calfSold]
                         .map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),
@@ -510,7 +536,7 @@ class _AddCalfScreenState extends State<AddCalfScreen> {
                   const SizedBox(height: 12),
                   if (widget.animals.isNotEmpty)
                     DropdownButtonFormField<AnimalModel>(
-                      value: _mother,
+        initialValue: _mother,
                       decoration: const InputDecoration(labelText: 'Anne (İsteğe Bağlı)'),
                       items: widget.animals
                           .where((a) => a.gender == AppConstants.female)
@@ -658,7 +684,7 @@ class _AddBreedingScreenState extends State<AddBreedingScreen> {
                 padding: const EdgeInsets.all(16),
                 child: Column(children: [
                   DropdownButtonFormField<AnimalModel>(
-                    value: _selectedAnimal,
+        initialValue: _selectedAnimal,
                     decoration: const InputDecoration(labelText: 'Hayvan *'),
                     items: widget.animals
                         .map((a) => DropdownMenuItem(value: a, child: Text('${a.earTag} ${a.name ?? ''}')))
@@ -668,7 +694,7 @@ class _AddBreedingScreenState extends State<AddBreedingScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _breedingType,
+        initialValue: _breedingType,
                     decoration: const InputDecoration(labelText: 'Tohumlama Tipi'),
                     items: AppConstants.breedingTypes
                         .map((t) => DropdownMenuItem(value: t, child: Text(t, overflow: TextOverflow.ellipsis)))
@@ -677,7 +703,7 @@ class _AddBreedingScreenState extends State<AddBreedingScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _status,
+        initialValue: _status,
                     decoration: const InputDecoration(labelText: 'Durum'),
                     items: [AppConstants.breedingInseminated, AppConstants.breedingPregnant,
                             AppConstants.breedingCalved, AppConstants.breedingOpen]

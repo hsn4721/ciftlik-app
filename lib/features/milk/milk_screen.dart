@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme/app_theme.dart';
 import '../../shared/widgets/module_header.dart';
@@ -10,6 +10,8 @@ import '../../data/repositories/tank_repository.dart';
 import '../../data/repositories/animal_repository.dart';
 import '../../data/models/animal_model.dart';
 import '../../shared/widgets/empty_state.dart';
+import '../../shared/widgets/skeleton_loader.dart';
+import '../../core/services/auth_service.dart';
 
 class MilkScreen extends StatefulWidget {
   const MilkScreen({super.key});
@@ -151,7 +153,7 @@ class _MilkScreenState extends State<MilkScreen> with SingleTickerProviderStateM
         children: [
           const ModuleBackground(pattern: ModulePattern.milk),
           _isLoading
-          ? const Center(child: CircularProgressIndicator(color: AppColors.primaryGreen))
+          ? const SkeletonList(itemCount: 8, itemHeight: 72)
           : Column(
               children: [
                 _SummaryBar(
@@ -181,13 +183,17 @@ class _MilkScreenState extends State<MilkScreen> with SingleTickerProviderStateM
             ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddSheet,
-        backgroundColor: AppColors.primaryGreen,
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text('Sağım Gir',
-            style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final u = AuthService.instance.currentUser;
+        if (u != null && !u.canAddMilking) return const SizedBox.shrink();
+        return FloatingActionButton.extended(
+          onPressed: _showAddSheet,
+          backgroundColor: AppColors.primaryGreen,
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: const Text('Sağım Gir',
+              style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        );
+      }),
     );
   }
 }
@@ -578,7 +584,7 @@ class _TankTab extends StatelessWidget {
           borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
       builder: (ctx) => StatefulBuilder(
         builder: (ctx, setS) {
-          final amount = double.tryParse(amountCtrl.text) ?? 0;
+          final amount = double.tryParse(amountCtrl.text.replaceAll(',', '.')) ?? 0;
           final price = double.tryParse(priceCtrl.text.replaceAll(',', '.')) ?? 0;
           final total = amount * price;
           return Padding(
@@ -650,7 +656,7 @@ class _TankTab extends StatelessWidget {
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                   ),
                   onPressed: () async {
-                    final amt = double.tryParse(amountCtrl.text);
+                    final amt = double.tryParse(amountCtrl.text.replaceAll(',', '.'));
                     if (amt == null || amt <= 0) return;
                     final unitPrice = double.tryParse(priceCtrl.text.replaceAll(',', '.'));
                     await tankRepo.deduct(amt,
@@ -873,7 +879,7 @@ class _BulkMilkingScreenState extends State<BulkMilkingScreen> {
 
   Future<void> _save() async {
     final count = int.tryParse(_animalCountCtrl.text);
-    final amount = double.tryParse(_totalAmountCtrl.text);
+    final amount = double.tryParse(_totalAmountCtrl.text.replaceAll(',', '.'));
     if (count == null || count <= 0) {
       ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('Geçerli bir hayvan sayısı girin')));
@@ -1158,7 +1164,7 @@ class _AddMilkingScreenState extends State<AddMilkingScreen> {
       animalName: _selectedAnimal!.name ?? _selectedAnimal!.earTag,
       date: _date.toIso8601String().split('T').first,
       session: _session,
-      amount: double.parse(_amountController.text),
+      amount: double.parse(_amountController.text.replaceAll(',', '.')),
       notes: _notesController.text.isEmpty ? null : _notesController.text,
       createdAt: DateTime.now().toIso8601String(),
     );
@@ -1239,7 +1245,7 @@ class _AddMilkingScreenState extends State<AddMilkingScreen> {
                           'Sağımda hayvan bulunamadı. Önce hayvan durumunu "Sağımda" olarak güncelleyin.',
                           style: TextStyle(fontSize: 13, color: AppColors.textGrey))
                       : DropdownButtonFormField<AnimalModel>(
-                          value: _selectedAnimal,
+        initialValue: _selectedAnimal,
                           hint: const Text('Hayvan seçin'),
                           decoration: const InputDecoration(
                               prefixIcon: Icon(Icons.pets, color: AppColors.primaryGreen, size: 20)),

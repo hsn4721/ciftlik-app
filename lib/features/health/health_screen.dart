@@ -1,13 +1,16 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../shared/widgets/module_header.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/services/auth_service.dart';
 import '../../core/services/notification_service.dart';
 import '../../data/models/health_model.dart';
 import '../../data/repositories/health_repository.dart';
 import '../../data/repositories/animal_repository.dart';
 import '../../data/models/animal_model.dart';
 import '../../shared/widgets/empty_state.dart';
+import '../../shared/widgets/skeleton_loader.dart';
+import '../../shared/widgets/undo_snackbar.dart';
 
 class HealthScreen extends StatefulWidget {
   const HealthScreen({super.key});
@@ -67,28 +70,32 @@ class _HealthScreenState extends State<HealthScreen> with SingleTickerProviderSt
           tabs: const [Tab(text: 'Sağlık Kayıtları'), Tab(text: 'Aşı Takvimi')],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          if (_tabController.index == 0) {
-            final r = await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddHealthScreen()));
-            if (r == true) _load();
-          } else {
-            final r = await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddVaccineScreen()));
-            if (r == true) _load();
-          }
-        },
-        backgroundColor: AppColors.errorRed,
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: Text(
-          _tabController.index == 0 ? 'Kayıt Ekle' : 'Aşı Ekle',
-          style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
-        ),
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final u = AuthService.instance.currentUser;
+        if (u != null && !u.canManageHealth) return const SizedBox.shrink();
+        return FloatingActionButton.extended(
+          onPressed: () async {
+            if (_tabController.index == 0) {
+              final r = await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddHealthScreen()));
+              if (r == true) _load();
+            } else {
+              final r = await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddVaccineScreen()));
+              if (r == true) _load();
+            }
+          },
+          backgroundColor: AppColors.errorRed,
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: Text(
+            _tabController.index == 0 ? 'Kayıt Ekle' : 'Aşı Ekle',
+            style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700),
+          ),
+        );
+      }),
       body: Stack(
         children: [
           const ModuleBackground(pattern: ModulePattern.health),
           _isLoading
-              ? const Center(child: CircularProgressIndicator(color: AppColors.primaryGreen))
+              ? const SkeletonList(itemCount: 6, itemHeight: 80)
               : TabBarView(
                   controller: _tabController,
                   children: [
@@ -141,25 +148,58 @@ class _HealthTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))],
       ),
       child: Column(
         children: [
           ListTile(
             leading: Container(
               padding: const EdgeInsets.all(10),
-              decoration: BoxDecoration(color: AppColors.errorRed.withOpacity(0.12), borderRadius: BorderRadius.circular(10)),
+              decoration: BoxDecoration(color: AppColors.errorRed.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(10)),
               child: const Icon(Icons.favorite, color: AppColors.errorRed, size: 20),
             ),
             title: Text(record.animalName, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
             subtitle: Text('${record.type} • ${record.date}', style: const TextStyle(fontSize: 12, color: AppColors.textGrey)),
-            trailing: IconButton(
-              icon: const Icon(Icons.delete_outline, color: AppColors.textGrey, size: 18),
-              onPressed: () async {
-                await HealthRepository().deleteHealth(record.id!);
-                onDelete();
-              },
-            ),
+            trailing: Builder(builder: (_) {
+              final u = AuthService.instance.currentUser;
+              final canEdit = u?.canManageHealth ?? true;
+              if (!canEdit) return const SizedBox.shrink();
+              return Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.edit_outlined, color: AppColors.primaryGreen, size: 18),
+                    tooltip: 'Düzenle',
+                    onPressed: () async {
+                      final r = await Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => AddHealthScreen(initial: record)),
+                      );
+                      if (r == true) onDelete();
+                    },
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.delete_outline, color: AppColors.textGrey, size: 18),
+                    tooltip: 'Sil',
+                    onPressed: () async {
+                      final backup = record;
+                      await HealthRepository().deleteHealth(record.id!);
+                      onDelete();
+                      if (context.mounted) {
+                        UndoSnackbar.show(
+                          context,
+                          message: '${backup.animalName} — ${backup.type} silindi',
+                          onUndo: () async {
+                            await HealthRepository().insertHealth(backup);
+                            onDelete();
+                          },
+                        );
+                      }
+                    },
+                  ),
+                ],
+              );
+            }),
           ),
           if (record.diagnosis != null || record.medicine != null)
             Padding(
@@ -279,13 +319,13 @@ class _VaccineTile extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 6, offset: const Offset(0, 2))],
-        border: Border.all(color: color.withOpacity(0.3)),
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 6, offset: const Offset(0, 2))],
+        border: Border.all(color: color.withValues(alpha: 0.3)),
       ),
       child: ListTile(
         leading: Container(
           padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+          decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
           child: Icon(Icons.vaccines, color: color, size: 20),
         ),
         title: Text(vaccine.vaccineName, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700)),
@@ -300,20 +340,54 @@ class _VaccineTile extends StatelessWidget {
               ),
           ],
         ),
-        trailing: IconButton(
-          icon: const Icon(Icons.delete_outline, color: AppColors.textGrey, size: 18),
-          onPressed: () async {
-            await HealthRepository().deleteVaccine(vaccine.id!);
-            onDelete();
-          },
-        ),
+        trailing: Builder(builder: (_) {
+          final u = AuthService.instance.currentUser;
+          final canEdit = u?.canManageHealth ?? true;
+          if (!canEdit) return const SizedBox.shrink();
+          return Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              IconButton(
+                icon: const Icon(Icons.edit_outlined, color: AppColors.primaryGreen, size: 18),
+                tooltip: 'Düzenle',
+                onPressed: () async {
+                  final r = await Navigator.push(
+                    context,
+                    MaterialPageRoute(builder: (_) => AddVaccineScreen(initial: vaccine)),
+                  );
+                  if (r == true) onDelete();
+                },
+              ),
+              IconButton(
+                icon: const Icon(Icons.delete_outline, color: AppColors.textGrey, size: 18),
+                tooltip: 'Sil',
+                onPressed: () async {
+                  final backup = vaccine;
+                  await HealthRepository().deleteVaccine(vaccine.id!);
+                  onDelete();
+                  if (context.mounted) {
+                    UndoSnackbar.show(
+                      context,
+                      message: '${backup.animalName} — ${backup.vaccineName} aşısı silindi',
+                      onUndo: () async {
+                        await HealthRepository().insertVaccine(backup);
+                        onDelete();
+                      },
+                    );
+                  }
+                },
+              ),
+            ],
+          );
+        }),
       ),
     );
   }
 }
 
 class AddHealthScreen extends StatefulWidget {
-  const AddHealthScreen({super.key});
+  final HealthModel? initial; // null=yeni kayıt, dolu=düzenleme
+  const AddHealthScreen({super.key, this.initial});
 
   @override
   State<AddHealthScreen> createState() => _AddHealthScreenState();
@@ -337,12 +411,45 @@ class _AddHealthScreenState extends State<AddHealthScreen> {
   DateTime _date = DateTime.now();
   bool _isSaving = false;
 
-  final List<String> _types = ['Hastalık', 'Yaralanma', 'Mastitis', 'Topallık', 'Gebelik Kontrolü', 'Doğum Komplikasyonu', 'Diğer'];
+  final List<String> _types = [
+    'Hastalık',
+    'Yaralanma',
+    'Mastitis',
+    'Topallık',
+    'Gebelik',
+    'Gebelik Kontrolü',
+    'Doğum',
+    'Doğum Komplikasyonu',
+    'Diğer',
+  ];
+
+  bool get _isEditing => widget.initial != null;
 
   @override
   void initState() {
     super.initState();
-    _animalRepo.getAll().then((a) => setState(() => _animals = a));
+    final init = widget.initial;
+    if (init != null) {
+      _diagnosisController.text = init.diagnosis ?? '';
+      _treatmentController.text = init.treatment ?? '';
+      _medicineController.text = init.medicine ?? '';
+      _doseController.text = init.dose ?? '';
+      _vetController.text = init.vetName ?? '';
+      _costController.text = init.cost?.toString() ?? '';
+      _notesController.text = init.notes ?? '';
+      _withdrawalController.text = init.milkWithdrawal > 0 ? init.milkWithdrawal.toString() : '';
+      if (_types.contains(init.type)) _type = init.type;
+      _date = DateTime.tryParse(init.date) ?? DateTime.now();
+    }
+    _animalRepo.getAll().then((a) {
+      if (!mounted) return;
+      setState(() {
+        _animals = a;
+        if (init != null) {
+          _selectedAnimal = a.where((x) => x.id == init.animalId).firstOrNull;
+        }
+      });
+    });
   }
 
   @override
@@ -365,8 +472,10 @@ class _AddHealthScreenState extends State<AddHealthScreen> {
     }
     setState(() => _isSaving = true);
     final withdrawal = int.tryParse(_withdrawalController.text) ?? 0;
-    final now = DateTime.now().toIso8601String();
+    final init = widget.initial;
+    final createdAt = init?.createdAt ?? DateTime.now().toIso8601String();
     final model = HealthModel(
+      id: init?.id,
       animalId: _selectedAnimal!.id!,
       animalEarTag: _selectedAnimal!.earTag,
       animalName: _selectedAnimal!.name ?? _selectedAnimal!.earTag,
@@ -379,13 +488,20 @@ class _AddHealthScreenState extends State<AddHealthScreen> {
       milkWithdrawal: withdrawal,
       milkWithdrawalEnd: withdrawal > 0 ? _date.add(Duration(days: withdrawal)).toIso8601String().split('T').first : null,
       vetName: _vetController.text.isEmpty ? null : _vetController.text,
-      cost: double.tryParse(_costController.text),
+      cost: double.tryParse(_costController.text.replaceAll(',', '.')),
       notes: _notesController.text.isEmpty ? null : _notesController.text,
-      createdAt: now,
+      createdAt: createdAt,
     );
     try {
-      await _repo.insertHealth(model);
-      if (_type == 'Gebelik Kontrolü' && _selectedAnimal != null) {
+      if (_isEditing) {
+        await _repo.updateHealth(model);
+      } else {
+        await _repo.insertHealth(model);
+      }
+      // Gebelik veya gebelik kontrolü kaydı → hayvanın durumu "Gebe" olarak işaretlensin
+      if (!_isEditing &&
+          (_type == 'Gebelik' || _type == 'Gebelik Kontrolü') &&
+          _selectedAnimal != null) {
         final updated = _selectedAnimal!.copyWith(status: AppConstants.animalPregnant);
         await _animalRepo.update(updated);
       }
@@ -405,7 +521,7 @@ class _AddHealthScreenState extends State<AddHealthScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Sağlık Kaydı Ekle'),
+        title: Text(_isEditing ? 'Sağlık Kaydı Düzenle' : 'Sağlık Kaydı Ekle'),
         actions: [
           TextButton(
             onPressed: _isSaving ? null : _save,
@@ -420,7 +536,7 @@ class _AddHealthScreenState extends State<AddHealthScreen> {
         children: [
           _FormCard(title: 'Temel Bilgiler', children: [
             DropdownButtonFormField<AnimalModel>(
-              value: _selectedAnimal,
+        initialValue: _selectedAnimal,
               hint: const Text('Hayvan seçin'),
               decoration: const InputDecoration(labelText: 'Hayvan *', prefixIcon: Icon(Icons.pets, color: AppColors.primaryGreen, size: 20)),
               items: _animals.map((a) => DropdownMenuItem(value: a, child: Text('${a.name ?? a.earTag} (${a.earTag})'))).toList(),
@@ -428,7 +544,7 @@ class _AddHealthScreenState extends State<AddHealthScreen> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: _type,
+        initialValue: _type,
               decoration: const InputDecoration(labelText: 'Kayıt Türü', prefixIcon: Icon(Icons.category_outlined, color: AppColors.primaryGreen, size: 20)),
               items: _types.map((t) => DropdownMenuItem(value: t, child: Text(t))).toList(),
               onChanged: (v) => setState(() => _type = v!),
@@ -493,7 +609,8 @@ class _AddHealthScreenState extends State<AddHealthScreen> {
 }
 
 class AddVaccineScreen extends StatefulWidget {
-  const AddVaccineScreen({super.key});
+  final VaccineModel? initial; // null=yeni kayıt, dolu=düzenleme
+  const AddVaccineScreen({super.key, this.initial});
 
   @override
   State<AddVaccineScreen> createState() => _AddVaccineScreenState();
@@ -510,16 +627,43 @@ class _AddVaccineScreenState extends State<AddVaccineScreen> {
 
   List<AnimalModel> _animals = [];
   AnimalModel? _selectedAnimal;
-  String _vaccineName = AppConstants.mandatoryVaccines.first;
+  String _vaccineName = AppConstants.allVaccines.first;
   bool _isHerdWide = false;
   DateTime _vaccineDate = DateTime.now();
   DateTime? _nextDate;
   bool _isSaving = false;
 
+  bool get _isEditing => widget.initial != null;
+
   @override
   void initState() {
     super.initState();
-    _animalRepo.getAll().then((a) => setState(() => _animals = a));
+    // Düzenleme modundaysa mevcut kaydın alanlarını doldur
+    final init = widget.initial;
+    if (init != null) {
+      _doseController.text = init.dose ?? '';
+      _vetController.text = init.vetName ?? '';
+      _costController.text = init.cost?.toString() ?? '';
+      _batchController.text = init.batchNumber ?? '';
+      _notesController.text = init.notes ?? '';
+      // Dropdown değeri listede varsa kullan, yoksa ilkine düşer
+      if (AppConstants.allVaccines.contains(init.vaccineName)) {
+        _vaccineName = init.vaccineName;
+      }
+      _isHerdWide = init.isHerdWide;
+      _vaccineDate = DateTime.tryParse(init.vaccineDate) ?? DateTime.now();
+      _nextDate = init.nextVaccineDate != null ? DateTime.tryParse(init.nextVaccineDate!) : null;
+    }
+    _animalRepo.getAll().then((a) {
+      if (!mounted) return;
+      setState(() {
+        _animals = a;
+        // Hayvan seçimini düzenleme modunda eşleştir
+        if (init != null && !init.isHerdWide && init.animalId != null) {
+          _selectedAnimal = a.where((x) => x.id == init.animalId).firstOrNull;
+        }
+      });
+    });
   }
 
   @override
@@ -538,8 +682,10 @@ class _AddVaccineScreenState extends State<AddVaccineScreen> {
       return;
     }
     setState(() => _isSaving = true);
-    final now = DateTime.now().toIso8601String();
+    final init = widget.initial;
+    final createdAt = init?.createdAt ?? DateTime.now().toIso8601String();
     final model = VaccineModel(
+      id: init?.id,
       animalId: _isHerdWide ? null : _selectedAnimal?.id,
       animalEarTag: _isHerdWide ? null : _selectedAnimal?.earTag,
       animalName: _isHerdWide ? null : _selectedAnimal?.name,
@@ -549,16 +695,20 @@ class _AddVaccineScreenState extends State<AddVaccineScreen> {
       nextVaccineDate: _nextDate?.toIso8601String().split('T').first,
       dose: _doseController.text.isEmpty ? null : _doseController.text,
       vetName: _vetController.text.isEmpty ? null : _vetController.text,
-      cost: double.tryParse(_costController.text),
+      cost: double.tryParse(_costController.text.replaceAll(',', '.')),
       batchNumber: _batchController.text.isEmpty ? null : _batchController.text,
       notes: _notesController.text.isEmpty ? null : _notesController.text,
-      createdAt: now,
+      createdAt: createdAt,
     );
     try {
-      await _repo.insertVaccine(model);
+      if (_isEditing) {
+        await _repo.updateVaccine(model);
+      } else {
+        await _repo.insertVaccine(model);
+      }
       if (_nextDate != null && !_isHerdWide && _selectedAnimal != null) {
         await NotificationService.instance.scheduleVaccineReminder(
-          id: model.createdAt.hashCode.abs(),
+          id: createdAt.hashCode.abs(),
           animalName: _selectedAnimal!.name ?? _selectedAnimal!.earTag,
           vaccineName: _vaccineName,
           dueDate: _nextDate!,
@@ -581,7 +731,7 @@ class _AddVaccineScreenState extends State<AddVaccineScreen> {
     return Scaffold(
       backgroundColor: AppColors.background,
       appBar: AppBar(
-        title: const Text('Aşı Kaydı Ekle'),
+        title: Text(_isEditing ? 'Aşı Kaydı Düzenle' : 'Aşı Kaydı Ekle'),
         actions: [
           TextButton(
             onPressed: _isSaving ? null : _save,
@@ -596,15 +746,50 @@ class _AddVaccineScreenState extends State<AddVaccineScreen> {
         children: [
           _FormCard(title: 'Aşı Bilgileri', children: [
             DropdownButtonFormField<String>(
-              value: _vaccineName,
-              decoration: const InputDecoration(labelText: 'Aşı Adı', prefixIcon: Icon(Icons.vaccines, color: AppColors.primaryGreen, size: 20)),
-              items: AppConstants.mandatoryVaccines.map((v) => DropdownMenuItem(value: v, child: Text(v))).toList(),
-              onChanged: (v) => setState(() => _vaccineName = v!),
+        initialValue: _vaccineName,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Aşı Adı',
+                prefixIcon: Icon(Icons.vaccines, color: AppColors.primaryGreen, size: 20),
+              ),
+              items: _buildVaccineDropdownItems(),
+              onChanged: (v) {
+                if (v != null) setState(() => _vaccineName = v);
+              },
             ),
+            // Seçili aşı için tavsiye / takvim bilgisi
+            if (AppConstants.vaccineSchedule[_vaccineName] != null) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.all(10),
+                decoration: BoxDecoration(
+                  color: AppColors.primaryGreen.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(color: AppColors.primaryGreen.withValues(alpha: 0.2)),
+                ),
+                child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                  const Icon(Icons.lightbulb_outline, size: 16, color: AppColors.primaryGreen),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text(
+                        AppConstants.vaccineCategory[_vaccineName] ?? '',
+                        style: const TextStyle(fontSize: 10, color: AppColors.primaryGreen, fontWeight: FontWeight.w800, letterSpacing: 0.5),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        AppConstants.vaccineSchedule[_vaccineName]!,
+                        style: const TextStyle(fontSize: 12, color: AppColors.textDark, height: 1.3),
+                      ),
+                    ]),
+                  ),
+                ]),
+              ),
+            ],
             const SizedBox(height: 12),
             SwitchListTile(
-              value: _isHerdWide,
-              activeColor: AppColors.primaryGreen,
+          value: _isHerdWide,
+          activeThumbColor: AppColors.primaryGreen,
               onChanged: (v) => setState(() => _isHerdWide = v),
               title: const Text('Tüm Sürüye Uygulandı', style: TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
               contentPadding: EdgeInsets.zero,
@@ -612,7 +797,7 @@ class _AddVaccineScreenState extends State<AddVaccineScreen> {
             if (!_isHerdWide) ...[
               const SizedBox(height: 8),
               DropdownButtonFormField<AnimalModel>(
-                value: _selectedAnimal,
+        initialValue: _selectedAnimal,
                 hint: const Text('Hayvan seçin'),
                 decoration: const InputDecoration(labelText: 'Hayvan', prefixIcon: Icon(Icons.pets, color: AppColors.primaryGreen, size: 20)),
                 items: _animals.map((a) => DropdownMenuItem(value: a, child: Text('${a.name ?? a.earTag} (${a.earTag})'))).toList(),
@@ -646,6 +831,47 @@ class _AddVaccineScreenState extends State<AddVaccineScreen> {
         ],
       ),
     );
+  }
+
+  /// Aşı dropdown'ı için kategori başlıklarıyla gruplu item listesi.
+  /// Başlık satırları disabled tutuldu — sadece görsel ayraç.
+  List<DropdownMenuItem<String>> _buildVaccineDropdownItems() {
+    final items = <DropdownMenuItem<String>>[];
+
+    void addSection(String title, List<String> vaccines, Color accent) {
+      items.add(DropdownMenuItem<String>(
+        enabled: false,
+        value: '__header_$title',
+        child: Container(
+          width: double.infinity,
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Text(
+            title.toUpperCase(),
+            style: TextStyle(
+              fontSize: 10,
+              fontWeight: FontWeight.w800,
+              color: accent,
+              letterSpacing: 0.8,
+            ),
+          ),
+        ),
+      ));
+      for (final v in vaccines) {
+        items.add(DropdownMenuItem<String>(
+          value: v,
+          child: Text(v, overflow: TextOverflow.ellipsis),
+        ));
+      }
+    }
+
+    addSection('Zorunlu (Devlet)', AppConstants.mandatoryVaccines, AppColors.errorRed);
+    addSection('Solunum Sistemi', AppConstants.respiratoryVaccines, AppColors.infoBlue);
+    addSection('Doğum Öncesi (Anne)', AppConstants.prepartumVaccines, const Color(0xFF6A1B9A));
+    addSection('Üreme', AppConstants.reproductiveVaccines, const Color(0xFFEF6C00));
+    addSection('Buzağı', AppConstants.calfVaccines, const Color(0xFF558B2F));
+    addSection('Diğer', AppConstants.otherVaccines, AppColors.textGrey);
+
+    return items;
   }
 
   Future<DateTime?> _pickDate(DateTime init) => showDatePicker(
@@ -693,7 +919,7 @@ class _FormCard extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(16),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))]),
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))]),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
         Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 10),

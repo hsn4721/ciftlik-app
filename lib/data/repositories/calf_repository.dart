@@ -1,12 +1,20 @@
 import '../local/database_helper.dart';
 import '../models/calf_model.dart';
+import '../../core/constants/app_constants.dart';
+import '../../core/services/activity_logger.dart';
 
 class CalfRepository {
   final _db = DatabaseHelper.instance;
 
   Future<int> insertCalf(CalfModel c) async {
     final db = await _db.database;
-    return await db.insert('calves', c.toMap()..remove('id'));
+    final id = await db.insert('calves', c.toMap()..remove('id'));
+    ActivityLogger.instance.log(
+      actionType: AppConstants.activityCalfAdded,
+      description: 'Yeni buzağı: ${c.name ?? c.earTag} · ${c.gender}',
+      relatedRef: 'calves:$id',
+    );
+    return id;
   }
 
   Future<List<CalfModel>> getAllCalves() async {

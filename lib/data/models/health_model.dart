@@ -147,6 +147,38 @@ class VaccineModel {
     required this.createdAt,
   });
 
+  VaccineModel copyWith({
+    int? id,
+    int? animalId,
+    String? animalEarTag,
+    String? animalName,
+    bool? isHerdWide,
+    String? vaccineName,
+    String? vaccineDate,
+    String? nextVaccineDate,
+    String? dose,
+    String? vetName,
+    double? cost,
+    String? batchNumber,
+    String? notes,
+    String? createdAt,
+  }) => VaccineModel(
+    id: id ?? this.id,
+    animalId: animalId ?? this.animalId,
+    animalEarTag: animalEarTag ?? this.animalEarTag,
+    animalName: animalName ?? this.animalName,
+    isHerdWide: isHerdWide ?? this.isHerdWide,
+    vaccineName: vaccineName ?? this.vaccineName,
+    vaccineDate: vaccineDate ?? this.vaccineDate,
+    nextVaccineDate: nextVaccineDate ?? this.nextVaccineDate,
+    dose: dose ?? this.dose,
+    vetName: vetName ?? this.vetName,
+    cost: cost ?? this.cost,
+    batchNumber: batchNumber ?? this.batchNumber,
+    notes: notes ?? this.notes,
+    createdAt: createdAt ?? this.createdAt,
+  );
+
   Map<String, dynamic> toMap() => {
         'id': id,
         'animalId': animalId,

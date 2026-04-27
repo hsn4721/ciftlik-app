@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 
 class EmptyState extends StatelessWidget {
@@ -25,7 +25,7 @@ class EmptyState extends StatelessWidget {
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(icon, size: 72, color: AppColors.primaryGreen.withOpacity(0.25)),
+            Icon(icon, size: 72, color: AppColors.primaryGreen.withValues(alpha: 0.25)),
             const SizedBox(height: 20),
             Text(title, style: const TextStyle(fontSize: 17, fontWeight: FontWeight.w700, color: AppColors.textDark)),
             const SizedBox(height: 8),

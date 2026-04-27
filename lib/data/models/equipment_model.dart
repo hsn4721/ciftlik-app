@@ -71,8 +71,14 @@ class EquipmentModel {
     createdAt: m['createdAt'],
   );
 
-  EquipmentModel copyWith({String? status, DateTime? lastMaintenanceDate, DateTime? nextMaintenanceDate, String? notes}) => EquipmentModel(
-    id: id,
+  EquipmentModel copyWith({
+    int? id,
+    String? status,
+    DateTime? lastMaintenanceDate,
+    DateTime? nextMaintenanceDate,
+    String? notes,
+  }) => EquipmentModel(
+    id: id ?? this.id,
     name: name,
     category: category,
     brand: brand,

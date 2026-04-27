@@ -1,12 +1,11 @@
 import '../local/database_helper.dart';
 import '../models/bulk_milking_model.dart';
-import '../models/finance_model.dart';
 import '../../core/constants/app_constants.dart';
-import 'finance_repository.dart';
+import '../../core/services/finance_linker.dart';
 
 class TankRepository {
   final _db = DatabaseHelper.instance;
-  final _financeRepo = FinanceRepository();
+  final _linker = FinanceLinker.instance;
 
   Future<double> getCurrentBalance() async {
     final db = await _db.database;
@@ -56,22 +55,34 @@ class TankRepository {
       _addEntry(type: 'Toplu Sağım', amount: amount, notes: notes, date: date);
 
   Future<void> deduct(double amount, {String? notes, double? unitPrice}) async {
-    await _addEntry(type: 'Satış', amount: -amount, notes: notes);
+    final db = await _db.database;
+    final current = await getCurrentBalance();
+    final newBalance = (current - amount).clamp(0.0, double.infinity);
+    final now = DateTime.now().toIso8601String();
+    final today = now.split('T').first;
+
+    final logId = await db.insert('milk_tank_log', {
+      'type': 'Satış',
+      'amount': -amount,
+      'balanceAfter': newBalance,
+      'notes': notes,
+      'date': today,
+      'createdAt': now,
+    });
+
     if (unitPrice != null && unitPrice > 0) {
       final total = amount * unitPrice;
-      final today = DateTime.now().toIso8601String().split('T').first;
-      try {
-        await _financeRepo.insert(FinanceModel(
-          type: AppConstants.income,
-          category: AppConstants.incomeMilk,
-          amount: total,
-          date: today,
-          period: 'daily',
-          description: 'Süt satışı — ${amount.toStringAsFixed(1)} L × ₺${unitPrice.toStringAsFixed(2)}',
-          notes: notes != null && notes.isNotEmpty ? notes : 'Otomatik - Süt Modülü',
-          createdAt: DateTime.now().toIso8601String(),
-        ));
-      } catch (_) {}
+      await _linker.link(
+        source: AppConstants.srcMilkSale,
+        sourceRef: 'milk_tank_log:$logId',
+        type: AppConstants.income,
+        category: AppConstants.incomeMilk,
+        amount: total,
+        date: today,
+        period: 'daily',
+        description: 'Süt satışı — ${amount.toStringAsFixed(1)} L × ₺${unitPrice.toStringAsFixed(2)}',
+        notes: notes != null && notes.isNotEmpty ? notes : 'Otomatik - Süt Modülü',
+      );
     }
   }
 

@@ -1,0 +1,17 @@
+# Compiled output
+lib/
+node_modules/
+
+# Service account credentials — NEVER commit
+serviceAccountKey.json
+.runtimeconfig.json
+.env
+.env.*
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+firebase-debug*.log

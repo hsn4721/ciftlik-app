@@ -1,11 +1,14 @@
+﻿import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import '../../core/theme/app_theme.dart';
+import '../../core/services/auth_service.dart';
 import '../../shared/widgets/module_header.dart';
 import '../../core/constants/app_constants.dart';
 import '../../data/models/equipment_model.dart';
 import '../../data/repositories/equipment_repository.dart';
 import '../../shared/widgets/empty_state.dart';
+import '../../shared/widgets/undo_snackbar.dart';
 
 class EquipmentScreen extends StatefulWidget {
   const EquipmentScreen({super.key});
@@ -34,7 +37,8 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
         _equipment = list;
         _loading = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[EquipmentScreen._load] $e\n$st');
       setState(() => _loading = false);
     }
   }
@@ -61,8 +65,19 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
       ),
     );
     if (ok == true) {
+      final backup = e;
       await _repo.delete(e.id!);
       _load();
+      if (mounted) {
+        UndoSnackbar.show(
+          context,
+          message: '${backup.name} silindi',
+          onUndo: () async {
+            await _repo.insert(backup);
+            _load();
+          },
+        );
+      }
     }
   }
 
@@ -94,15 +109,19 @@ class _EquipmentScreenState extends State<EquipmentScreen> {
             ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddEquipmentScreen()));
-          _load();
-        },
-        backgroundColor: AppColors.primaryGreen,
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text('Ekipman Ekle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final u = AuthService.instance.currentUser;
+        if (u != null && !u.canManageEquipment) return const SizedBox.shrink();
+        return FloatingActionButton.extended(
+          onPressed: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddEquipmentScreen()));
+            _load();
+          },
+          backgroundColor: AppColors.primaryGreen,
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: const Text('Ekipman Ekle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        );
+      }),
       body: Stack(
         children: [
           const ModuleBackground(pattern: ModulePattern.equipment),
@@ -138,7 +157,7 @@ class _StatusFilterBar extends StatelessWidget {
     final options = ['Tümü', AppConstants.equipmentActive, AppConstants.equipmentMaintenance, AppConstants.equipmentBroken];
     return Container(
       height: 48,
-      color: AppColors.primaryGreen.withOpacity(0.06),
+      color: AppColors.primaryGreen.withValues(alpha: 0.06),
       child: ListView(
         scrollDirection: Axis.horizontal,
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
@@ -250,14 +269,14 @@ class _EquipmentCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border(left: BorderSide(color: statusColor, width: 4)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)],
       ),
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Row(children: [
             CircleAvatar(
-              backgroundColor: statusColor.withOpacity(0.1),
+              backgroundColor: statusColor.withValues(alpha: 0.1),
               child: Icon(_categoryIcon(e.category), color: statusColor, size: 20),
             ),
             const SizedBox(width: 10),
@@ -269,7 +288,7 @@ class _EquipmentCard extends StatelessWidget {
             ),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-              decoration: BoxDecoration(color: statusColor.withOpacity(0.15), borderRadius: BorderRadius.circular(10)),
+              decoration: BoxDecoration(color: statusColor.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(10)),
               child: Text(e.status, style: TextStyle(color: statusColor, fontWeight: FontWeight.w700, fontSize: 11)),
             ),
             PopupMenuButton<String>(
@@ -424,7 +443,7 @@ class _AddEquipmentScreenState extends State<AddEquipmentScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _category,
+        initialValue: _category,
                     decoration: const InputDecoration(labelText: 'Kategori'),
                     items: AppConstants.equipmentCategories
                         .map((c) => DropdownMenuItem(value: c, child: Text(c, overflow: TextOverflow.ellipsis)))
@@ -433,7 +452,7 @@ class _AddEquipmentScreenState extends State<AddEquipmentScreen> {
                   ),
                   const SizedBox(height: 12),
                   DropdownButtonFormField<String>(
-                    value: _status,
+        initialValue: _status,
                     decoration: const InputDecoration(labelText: 'Durum'),
                     items: [AppConstants.equipmentActive, AppConstants.equipmentMaintenance, AppConstants.equipmentBroken]
                         .map((s) => DropdownMenuItem(value: s, child: Text(s))).toList(),

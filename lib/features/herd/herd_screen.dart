@@ -1,12 +1,19 @@
-import 'dart:io';
+﻿import 'dart:io';
 import 'package:flutter/material.dart';
 import '../../core/theme/app_theme.dart';
 import '../../shared/widgets/module_header.dart';
+import '../../shared/widgets/skeleton_loader.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/services/app_logger.dart';
+import '../../core/services/auth_service.dart';
 import '../../data/models/animal_model.dart';
 import '../../data/repositories/animal_repository.dart';
+import '../../core/subscription/feature_gate.dart';
+import '../../core/subscription/subscription_constants.dart';
 import 'add_animal_screen.dart';
 import 'animal_detail_screen.dart';
+import 'exited_animals_screen.dart';
+import 'scan_tag_screen.dart';
 
 class HerdScreen extends StatefulWidget {
   const HerdScreen({super.key});
@@ -23,6 +30,29 @@ class _HerdScreenState extends State<HerdScreen> {
   String _searchQuery = '';
   bool _isLoading = true;
 
+  // ─── Toplu seçim modu ──────────────────────────────────────
+  final Set<int> _selectedIds = {};
+  bool get _selectMode => _selectedIds.isNotEmpty;
+
+  void _toggleSelect(AnimalModel a) {
+    if (a.id == null) return;
+    setState(() {
+      if (_selectedIds.contains(a.id)) {
+        _selectedIds.remove(a.id);
+      } else {
+        _selectedIds.add(a.id!);
+      }
+    });
+  }
+
+  void _clearSelection() => setState(_selectedIds.clear);
+
+  void _selectAll() => setState(() {
+        _selectedIds
+          ..clear()
+          ..addAll(_filtered.map((a) => a.id).whereType<int>());
+      });
+
   final List<String> _statuses = ['Tümü', AppConstants.animalMilking, 'Kuruda', AppConstants.animalPregnant, AppConstants.animalSick];
 
   @override
@@ -32,6 +62,10 @@ class _HerdScreenState extends State<HerdScreen> {
   }
 
   void _showActionMenu() {
+    final user = AuthService.instance.currentUser;
+    final canAdd = user?.canAddAnimal ?? true;
+    final canRemove = user?.canRemoveAnimal ?? true;
+
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -45,25 +79,35 @@ class _HerdScreenState extends State<HerdScreen> {
             const SizedBox(height: 16),
             const Text('Sürü İşlemleri', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
             const SizedBox(height: 8),
-            ListTile(
-              leading: const CircleAvatar(backgroundColor: AppColors.primaryGreen, child: Icon(Icons.add, color: Colors.white)),
-              title: const Text('Hayvan Ekle', style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text('Sürüye yeni hayvan kaydet'),
-              onTap: () async {
-                Navigator.pop(context);
-                final result = await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddAnimalScreen()));
-                if (result == true) _load();
-              },
-            ),
-            ListTile(
-              leading: const CircleAvatar(backgroundColor: AppColors.errorRed, child: Icon(Icons.logout, color: Colors.white)),
-              title: const Text('Hayvan Çıkar', style: TextStyle(fontWeight: FontWeight.w600)),
-              subtitle: const Text('Satış, ölüm veya diğer nedenlerle çıkar'),
-              onTap: () {
-                Navigator.pop(context);
-                _showRemoveSheet();
-              },
-            ),
+            if (canAdd)
+              ListTile(
+                leading: const CircleAvatar(backgroundColor: AppColors.primaryGreen, child: Icon(Icons.add, color: Colors.white)),
+                title: const Text('Hayvan Ekle', style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('Sürüye yeni hayvan kaydet'),
+                onTap: () async {
+                  Navigator.pop(context);
+                  // Hayvan limiti kontrolü — paket limit aştıysa paywall göster
+                  if (!await FeatureGate.checkAnimalLimit(context, _animals.length)) return;
+                  if (!mounted) return;
+                  final result = await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddAnimalScreen()));
+                  if (result == true) _load();
+                },
+              ),
+            if (canRemove)
+              ListTile(
+                leading: const CircleAvatar(backgroundColor: AppColors.errorRed, child: Icon(Icons.logout, color: Colors.white)),
+                title: const Text('Hayvan Çıkar', style: TextStyle(fontWeight: FontWeight.w600)),
+                subtitle: const Text('Satış, ölüm veya diğer nedenlerle çıkar'),
+                onTap: () {
+                  Navigator.pop(context);
+                  _showRemoveSheet();
+                },
+              ),
+            if (!canAdd && !canRemove)
+              const Padding(
+                padding: EdgeInsets.all(20),
+                child: Text('Bu işlem için yetkiniz yok', style: TextStyle(color: AppColors.textGrey)),
+              ),
             const SizedBox(height: 8),
           ],
         ),
@@ -87,17 +131,31 @@ class _HerdScreenState extends State<HerdScreen> {
     setState(() => _isLoading = true);
     try {
       final animals = await _repo.getAll();
+      if (!mounted) return;
       setState(() {
         _animals = animals;
         _applyFilter();
         _isLoading = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      AppLogger.error('HerdScreen.load', e, st);
+      if (!mounted) return;
       setState(() {
         _animals = [];
         _filtered = [];
         _isLoading = false;
       });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: const Text('Sürü yüklenemedi. Lütfen tekrar deneyin.'),
+          backgroundColor: AppColors.errorRed,
+          action: SnackBarAction(
+            label: 'Tekrar Dene',
+            textColor: Colors.white,
+            onPressed: _load,
+          ),
+        ),
+      );
     }
   }
 
@@ -109,6 +167,126 @@ class _HerdScreenState extends State<HerdScreen> {
           (a.name?.toLowerCase().contains(_searchQuery.toLowerCase()) ?? false);
       return matchStatus && matchSearch;
     }).toList();
+  }
+
+  // ─── Toplu işlem aksiyonları ──────────────────────────────
+
+  Future<void> _bulkChangeStatus() async {
+    final user = AuthService.instance.currentUser;
+    if (user != null && !user.canEditAnimal) return;
+    final statuses = AppConstants.femaleStatuses;
+    final newStatus = await showModalBottomSheet<String>(
+      context: context,
+      shape: const RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          const Padding(
+            padding: EdgeInsets.all(16),
+            child: Text('Toplu Durum Değiştir',
+                style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+          ),
+          ...statuses.map((s) => ListTile(
+                leading: Icon(_statusIcon(s), color: _statusColor(s)),
+                title: Text(s),
+                onTap: () => Navigator.pop(ctx, s),
+              )),
+          const SizedBox(height: 8),
+        ]),
+      ),
+    );
+    if (newStatus == null) return;
+    for (final id in _selectedIds) {
+      final a = _animals.firstWhere((x) => x.id == id, orElse: () =>
+          _animals.first);
+      if (a.id != null) {
+        await _repo.update(a.copyWith(status: newStatus));
+      }
+    }
+    if (!mounted) return;
+    final count = _selectedIds.length;
+    _clearSelection();
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$count hayvan $newStatus olarak güncellendi'),
+        backgroundColor: AppColors.primaryGreen,
+      ),
+    );
+  }
+
+  PreferredSizeWidget _buildSelectAppBar() {
+    final user = AuthService.instance.currentUser;
+    final canEdit = user?.canEditAnimal ?? false;
+    final canRemove = user?.canRemoveAnimal ?? false;
+    return AppBar(
+      backgroundColor: AppColors.primaryGreen,
+      leading: IconButton(
+        icon: const Icon(Icons.close),
+        onPressed: _clearSelection,
+      ),
+      title: Text('${_selectedIds.length} seçili'),
+      actions: [
+        IconButton(
+          icon: const Icon(Icons.select_all),
+          tooltip: 'Tümünü Seç',
+          onPressed: _selectAll,
+        ),
+        if (canEdit)
+          IconButton(
+            icon: const Icon(Icons.edit_attributes),
+            tooltip: 'Durum Değiştir',
+            onPressed: _bulkChangeStatus,
+          ),
+        if (canRemove)
+          IconButton(
+            icon: const Icon(Icons.delete_forever),
+            tooltip: 'Toplu Sil',
+            onPressed: _bulkDelete,
+          ),
+      ],
+    );
+  }
+
+  Future<void> _bulkDelete() async {
+    final user = AuthService.instance.currentUser;
+    if (user != null && !user.canRemoveAnimal) return;
+    final count = _selectedIds.length;
+    final ok = await showDialog<bool>(
+      context: context,
+      builder: (_) => AlertDialog(
+        title: const Text('Toplu Silme'),
+        content: Text(
+          '$count hayvan kalıcı olarak silinecek. Bu işlem geri alınamaz.\n\n'
+          'Satış/ölüm kaydı yerine çıkış belgelemek istiyorsanız hayvanı tek tek '
+          '"Sürüden Çıkar" yöntemiyle işleyin.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false),
+              child: const Text('İptal')),
+          TextButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: TextButton.styleFrom(foregroundColor: AppColors.errorRed),
+            child: const Text('Sil'),
+          ),
+        ],
+      ),
+    );
+    if (ok != true) return;
+    for (final id in _selectedIds) {
+      await _repo.delete(id);
+    }
+    if (!mounted) return;
+    _clearSelection();
+    await _load();
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('$count hayvan silindi'),
+        backgroundColor: AppColors.errorRed,
+      ),
+    );
   }
 
   Color _statusColor(String status) {
@@ -137,13 +315,30 @@ class _HerdScreenState extends State<HerdScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: AppColors.background,
-      appBar: AppBar(
+      appBar: _selectMode ? _buildSelectAppBar() : AppBar(
         title: const Text('Sürü Takibi'),
         actions: [
           IconButton(
-            icon: const Icon(Icons.filter_list),
-            onPressed: () {},
-            tooltip: 'Filtrele',
+            icon: const Icon(Icons.qr_code_scanner),
+            tooltip: 'Küpe Tara',
+            onPressed: () async {
+              // QR tarama Pro özelliği
+              if (!await FeatureGate.requireAccess(
+                context, SubscriptionPlan.pro,
+                featureName: 'QR/Barkod Tarama',
+                reason: 'Küpe QR kodu ile hızlı hayvan arama Pro pakettedir.',
+              )) return;
+              if (!mounted) return;
+              await Navigator.push(context,
+                  MaterialPageRoute(builder: (_) => const ScanTagScreen()));
+              _load();
+            },
+          ),
+          IconButton(
+            icon: const Icon(Icons.history),
+            tooltip: 'Çıkmış Hayvanlar',
+            onPressed: () => Navigator.push(context,
+                MaterialPageRoute(builder: (_) => const ExitedAnimalsScreen())),
           ),
         ],
       ),
@@ -219,7 +414,7 @@ class _HerdScreenState extends State<HerdScreen> {
           // Liste
           Expanded(
             child: _isLoading
-                ? const Center(child: CircularProgressIndicator(color: AppColors.primaryGreen))
+                ? const SkeletonList(itemCount: 8, itemHeight: 80)
                 : _filtered.isEmpty
                     ? RefreshIndicator(
                         color: AppColors.primaryGreen,
@@ -232,15 +427,27 @@ class _HerdScreenState extends State<HerdScreen> {
                         child: ListView.builder(
                           padding: const EdgeInsets.symmetric(horizontal: 12),
                           itemCount: _filtered.length,
-                          itemBuilder: (_, i) => _AnimalCard(
-                            animal: _filtered[i],
-                            statusColor: _statusColor(_filtered[i].status),
-                            statusIcon: _statusIcon(_filtered[i].status),
-                            onTap: () async {
-                              await Navigator.push(context, MaterialPageRoute(builder: (_) => AnimalDetailScreen(animal: _filtered[i])));
-                              _load();
-                            },
-                          ),
+                          itemBuilder: (_, i) {
+                            final animal = _filtered[i];
+                            final isSelected = animal.id != null &&
+                                _selectedIds.contains(animal.id);
+                            return _AnimalCard(
+                              animal: animal,
+                              statusColor: _statusColor(animal.status),
+                              statusIcon: _statusIcon(animal.status),
+                              selected: isSelected,
+                              onLongPress: () => _toggleSelect(animal),
+                              onTap: () async {
+                                if (_selectMode) {
+                                  _toggleSelect(animal);
+                                  return;
+                                }
+                                await Navigator.push(context, MaterialPageRoute(
+                                    builder: (_) => AnimalDetailScreen(animal: animal)));
+                                _load();
+                              },
+                            );
+                          },
                         ),
                       ),
           ),
@@ -248,12 +455,19 @@ class _HerdScreenState extends State<HerdScreen> {
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showActionMenu,
-        backgroundColor: AppColors.primaryGreen,
-        icon: const Icon(Icons.menu, color: Colors.white),
-        label: const Text('İşlem', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final u = AuthService.instance.currentUser;
+        // Hayvan ekleme veya çıkışı yapabilen bir kullanıcı değilse FAB gösterme
+        if (u != null && !u.canAddAnimal && !u.canRemoveAnimal) {
+          return const SizedBox.shrink();
+        }
+        return FloatingActionButton.extended(
+          onPressed: _showActionMenu,
+          backgroundColor: AppColors.primaryGreen,
+          icon: const Icon(Icons.menu, color: Colors.white),
+          label: const Text('İşlem', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w600)),
+        );
+      }),
     );
   }
 }
@@ -269,7 +483,7 @@ class _SummaryChip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.15),
+        color: Colors.white.withValues(alpha: 0.15),
         borderRadius: BorderRadius.circular(20),
       ),
       child: Row(
@@ -288,18 +502,33 @@ class _AnimalCard extends StatelessWidget {
   final Color statusColor;
   final IconData statusIcon;
   final VoidCallback onTap;
-  const _AnimalCard({required this.animal, required this.statusColor, required this.statusIcon, required this.onTap});
+  final VoidCallback? onLongPress;
+  final bool selected;
+  const _AnimalCard({
+    required this.animal,
+    required this.statusColor,
+    required this.statusIcon,
+    required this.onTap,
+    this.onLongPress,
+    this.selected = false,
+  });
 
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: onTap,
+      onLongPress: onLongPress,
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: Colors.white,
+          color: selected
+              ? AppColors.primaryGreen.withValues(alpha: 0.12)
+              : Colors.white,
           borderRadius: BorderRadius.circular(14),
-          boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 8, offset: const Offset(0, 2))],
+          border: selected
+              ? Border.all(color: AppColors.primaryGreen, width: 2)
+              : null,
+          boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 8, offset: const Offset(0, 2))],
         ),
         child: Row(
           children: [
@@ -320,7 +549,7 @@ class _AnimalCard extends StatelessWidget {
                     width: 50,
                     height: 50,
                     decoration: BoxDecoration(
-                      color: statusColor.withOpacity(0.12),
+                      color: statusColor.withValues(alpha: 0.12),
                       shape: BoxShape.circle,
                     ),
                     child: Icon(statusIcon, color: statusColor, size: 24),
@@ -362,7 +591,7 @@ class _AnimalCard extends StatelessWidget {
               margin: const EdgeInsets.only(right: 12),
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
-                color: statusColor.withOpacity(0.12),
+                color: statusColor.withValues(alpha: 0.12),
                 borderRadius: BorderRadius.circular(20),
               ),
               child: Text(animal.status, style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: statusColor)),
@@ -530,7 +759,7 @@ class _RemoveAnimalSheetState extends State<_RemoveAnimalSheet> {
                       margin: const EdgeInsets.only(bottom: 6),
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                       decoration: BoxDecoration(
-                        color: sel ? AppColors.primaryGreen.withOpacity(0.1) : Colors.white,
+                        color: sel ? AppColors.primaryGreen.withValues(alpha: 0.1) : Colors.white,
                         borderRadius: BorderRadius.circular(10),
                         border: Border.all(
                           color: sel ? AppColors.primaryGreen : AppColors.divider,
@@ -574,7 +803,7 @@ class _RemoveAnimalSheetState extends State<_RemoveAnimalSheet> {
                         duration: const Duration(milliseconds: 150),
                         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
-                          color: sel ? color.withOpacity(0.12) : Colors.white,
+                          color: sel ? color.withValues(alpha: 0.12) : Colors.white,
                           borderRadius: BorderRadius.circular(10),
                           border: Border.all(color: sel ? color : AppColors.divider, width: sel ? 2 : 1),
                         ),

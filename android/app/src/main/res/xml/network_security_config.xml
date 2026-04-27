@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ÇiftlikPRO Network Security Config
+
+  Production'da cleartext (HTTP) traffic genel olarak yasak. Sadece
+  Firebase, Google API'leri ve hava durumu sağlayıcısı için HTTPS
+  zorunlu. Android 9+ default'u zaten cleartext-yasaklı ama explicit
+  config ile review denetimine kanıt sunuyoruz.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

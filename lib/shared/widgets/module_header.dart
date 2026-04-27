@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 
 enum ModulePattern { milk, herd, health, finance, feed, calf, staff, equipment, subsidies }
 
@@ -32,13 +32,13 @@ class ModuleBackground extends StatelessWidget {
           Positioned(
             right: -30,
             top: 20,
-            child: Icon(icon, size: 230, color: color.withOpacity(0.055)),
+            child: Icon(icon, size: 230, color: color.withValues(alpha: 0.055)),
           ),
           // İkinci küçük ikon — sol alt
           Positioned(
             left: -25,
             bottom: 80,
-            child: Icon(icon, size: 140, color: color.withOpacity(0.035)),
+            child: Icon(icon, size: 140, color: color.withValues(alpha: 0.035)),
           ),
         ],
         ),

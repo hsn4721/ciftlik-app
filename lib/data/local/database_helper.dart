@@ -18,7 +18,7 @@ class DatabaseHelper {
     final path = join(dbPath, fileName);
     return await openDatabase(
       path,
-      version: 8,
+      version: 9,
       onCreate: _createDB,
       onUpgrade: _upgradeDB,
     );
@@ -125,6 +125,68 @@ class DatabaseHelper {
     }
     if (oldVersion < 8) {
       await db.execute("ALTER TABLE finance ADD COLUMN period TEXT NOT NULL DEFAULT 'monthly'");
+    }
+    if (oldVersion < 9) {
+      // Yeni finans alanları — source/sourceRef ile çift-yönlü senkron,
+      // paymentMethod/isPaid/dueDate ile profesyonel ödeme takibi, vatRate ile KDV.
+      await db.execute("ALTER TABLE finance ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'");
+      await db.execute("ALTER TABLE finance ADD COLUMN sourceRef TEXT");
+      await db.execute("ALTER TABLE finance ADD COLUMN paymentMethod TEXT NOT NULL DEFAULT 'cash'");
+      await db.execute("ALTER TABLE finance ADD COLUMN isPaid INTEGER NOT NULL DEFAULT 1");
+      await db.execute("ALTER TABLE finance ADD COLUMN dueDate TEXT");
+      await db.execute("ALTER TABLE finance ADD COLUMN vatRate REAL");
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_finance_sourceRef ON finance(sourceRef)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_finance_source ON finance(source)');
+      await db.execute('CREATE INDEX IF NOT EXISTS idx_finance_isPaid ON finance(isPaid)');
+
+      // ─── Backfill: notes + category + type + period bilgisinden source çıkar ─
+      // Yem modülü — period'a göre alım mı günlük yemleme mi ayır
+      await db.execute(
+        "UPDATE finance SET source = 'feed_daily' "
+        "WHERE notes LIKE 'Otomatik%Yem%' AND period = 'daily'",
+      );
+      await db.execute(
+        "UPDATE finance SET source = 'feed_purchase' "
+        "WHERE notes LIKE 'Otomatik%Yem%' AND period = 'monthly'",
+      );
+      // Sağlık modülü — aşı mı veteriner mi description'dan anla
+      await db.execute(
+        "UPDATE finance SET source = 'vaccine' "
+        "WHERE notes LIKE 'Otomatik%Sağlık%' AND description LIKE '%aşı%'",
+      );
+      await db.execute(
+        "UPDATE finance SET source = 'vet' "
+        "WHERE notes LIKE 'Otomatik%Sağlık%' AND source = 'manual'",
+      );
+      // Sürü modülü — gelir mi gider mi
+      await db.execute(
+        "UPDATE finance SET source = 'animal_sale' "
+        "WHERE notes LIKE 'Otomatik%Sürü%' AND type = 'Gelir'",
+      );
+      await db.execute(
+        "UPDATE finance SET source = 'animal_purchase' "
+        "WHERE notes LIKE 'Otomatik%Sürü%' AND type = 'Gider'",
+      );
+      // Süt modülü
+      await db.execute(
+        "UPDATE finance SET source = 'milk_sale' "
+        "WHERE notes LIKE 'Otomatik%Süt%' OR category = 'Süt Satışı'",
+      );
+      // Ekipman
+      await db.execute(
+        "UPDATE finance SET source = 'equipment' "
+        "WHERE notes LIKE 'Otomatik%Ekipman%'",
+      );
+      // Destek (subsidy)
+      await db.execute(
+        "UPDATE finance SET source = 'subsidy' "
+        "WHERE category = 'Devlet Desteği' AND source = 'manual'",
+      );
+      // Maaş — description "maaş ödemesi" içerir
+      await db.execute(
+        "UPDATE finance SET source = 'salary' "
+        "WHERE category = 'İşçilik' AND description LIKE '%maaş%'",
+      );
     }
   }
 
@@ -285,9 +347,19 @@ class DatabaseHelper {
         invoiceNo TEXT,
         notes TEXT,
         period TEXT NOT NULL DEFAULT 'monthly',
-        createdAt TEXT NOT NULL
+        createdAt TEXT NOT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        sourceRef TEXT,
+        paymentMethod TEXT NOT NULL DEFAULT 'cash',
+        isPaid INTEGER NOT NULL DEFAULT 1,
+        dueDate TEXT,
+        vatRate REAL
       )
     ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_finance_date ON finance(date)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_finance_sourceRef ON finance(sourceRef)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_finance_source ON finance(source)');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_finance_isPaid ON finance(isPaid)');
 
     // Staff
     await db.execute('''
@@ -406,5 +478,27 @@ class DatabaseHelper {
   Future<void> close() async {
     final db = await instance.database;
     db.close();
+  }
+
+  /// Tüm tabloları temizler — kullanıcı değiştiğinde önceki user'ın
+  /// cihaz cache verisinin yeni kullanıcıya sızmasını engeller.
+  /// Tablolar silinmez (CREATE TABLE çalışmasına gerek yok), sadece tüm kayıtlar.
+  Future<void> resetAllData() async {
+    final db = await instance.database;
+    final tables = [
+      'animals', 'calves', 'breeding',
+      'milking', 'bulk_milking', 'milk_tank_log',
+      'health', 'vaccines',
+      'feed_stock', 'feed_transactions', 'feed_plans', 'feed_sessions',
+      'finance',
+      'staff', 'tasks',
+      'equipment',
+      'subsidies',
+    ];
+    final batch = db.batch();
+    for (final table in tables) {
+      batch.delete(table);
+    }
+    await batch.commit(noResult: true);
   }
 }

@@ -43,3 +43,22 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Android signing — keystore credentials must NEVER be committed
+android/key.properties
+android/app/upload-keystore.jks
+android/app/*.jks
+*.keystore
+
+# Android Kotlin compiler cache (bloats repo)
+android/.kotlin/
+
+# Firebase service account / admin credentials (Cloud Functions)
+functions/serviceAccountKey.json
+functions/.env
+functions/lib/
+
+# Local IDE temp / OS
+.test_*.png
+.test_*.txt
+logs.txt

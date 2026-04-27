@@ -1,4 +1,4 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/gestures.dart';
 import 'package:intl/intl.dart';
@@ -6,6 +6,9 @@ import 'package:webview_flutter/webview_flutter.dart';
 import '../../core/theme/app_theme.dart';
 import '../../shared/widgets/module_header.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/services/auth_service.dart';
+import '../../core/subscription/feature_gate.dart';
+import '../../core/subscription/subscription_constants.dart';
 import '../../data/models/finance_model.dart';
 import '../../data/repositories/finance_repository.dart';
 import '../../shared/widgets/empty_state.dart';
@@ -27,6 +30,24 @@ class _SubsidiesScreenState extends State<SubsidiesScreen> with SingleTickerProv
   void initState() {
     super.initState();
     _tab = TabController(length: 3, vsync: this);
+    WidgetsBinding.instance.addPostFrameCallback((_) => _gateAndLoad());
+  }
+
+  /// Subsidies (Devlet Destekleri) Pro-only modül. Plan yoksa paywall göster
+  /// ve ekranı kapat — owner-haricindeki rollere "owner ile konuş" diyaloğu.
+  Future<void> _gateAndLoad() async {
+    if (!mounted) return;
+    final ok = await FeatureGate.requireAccess(
+      context,
+      SubscriptionPlan.pro,
+      featureName: 'Devlet Destekleri',
+      reason: 'Devlet desteklerini takip ve yönetim Pro pakette yer alır.',
+    );
+    if (!mounted) return;
+    if (!ok) {
+      Navigator.of(context).maybePop();
+      return;
+    }
     _load();
   }
 
@@ -44,7 +65,8 @@ class _SubsidiesScreenState extends State<SubsidiesScreen> with SingleTickerProv
         _subsidyRecords = all.where((f) => f.category == AppConstants.incomeSubsidy).toList();
         _loading = false;
       });
-    } catch (_) {
+    } catch (e, st) {
+      debugPrint('[SubsidiesScreen._load] $e\n$st');
       setState(() => _loading = false);
     }
   }
@@ -84,16 +106,20 @@ class _SubsidiesScreenState extends State<SubsidiesScreen> with SingleTickerProv
           tabs: const [Tab(text: 'Yıllık Takvim'), Tab(text: 'Alınan Destekler'), Tab(text: 'Bakanlık Duyuruları')],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: () async {
-          await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddSubsidyScreen()));
-          _load();
-        },
-        icon: const Icon(Icons.add),
-        label: const Text('Destek Ekle'),
-        backgroundColor: AppColors.gold,
-        foregroundColor: Colors.white,
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final u = AuthService.instance.currentUser;
+        if (u != null && !u.canManageSubsidies) return const SizedBox.shrink();
+        return FloatingActionButton.extended(
+          onPressed: () async {
+            await Navigator.push(context, MaterialPageRoute(builder: (_) => const AddSubsidyScreen()));
+            _load();
+          },
+          icon: const Icon(Icons.add),
+          label: const Text('Destek Ekle'),
+          backgroundColor: AppColors.gold,
+          foregroundColor: Colors.white,
+        );
+      }),
       body: Stack(
         children: [
           const ModuleBackground(pattern: ModulePattern.subsidies),
@@ -124,9 +150,9 @@ class _CalendarTab extends StatelessWidget {
         Container(
           padding: const EdgeInsets.all(14),
           decoration: BoxDecoration(
-            color: AppColors.infoBlue.withOpacity(0.08),
+            color: AppColors.infoBlue.withValues(alpha: 0.08),
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: AppColors.infoBlue.withOpacity(0.3)),
+            border: Border.all(color: AppColors.infoBlue.withValues(alpha: 0.3)),
           ),
           child: const Row(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -163,7 +189,7 @@ class _SubsidyCard extends StatelessWidget {
         color: Colors.white,
         borderRadius: BorderRadius.circular(12),
         border: Border(left: BorderSide(color: AppColors.gold, width: 4)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.05), blurRadius: 4)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.05), blurRadius: 4)],
       ),
       child: Padding(
         padding: const EdgeInsets.all(14),
@@ -179,7 +205,7 @@ class _SubsidyCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
-              color: AppColors.gold.withOpacity(0.15),
+              color: AppColors.gold.withValues(alpha: 0.15),
               borderRadius: BorderRadius.circular(6),
             ),
             child: Text(
@@ -261,7 +287,7 @@ class _ReceivedTab extends StatelessWidget {
                   color: Colors.white,
                   borderRadius: BorderRadius.circular(10),
                   border: Border(left: BorderSide(color: AppColors.gold, width: 4)),
-                  boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 3)],
+                  boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 3)],
                 ),
                 child: ListTile(
                   leading: const CircleAvatar(
@@ -407,6 +433,7 @@ class _AddSubsidyScreenState extends State<AddSubsidyScreen> {
       amount: double.parse(_amountCtrl.text.replaceAll(',', '.')),
       date: DateFormat('yyyy-MM-dd').format(_date),
       description: _descCtrl.text.trim().isEmpty ? null : _descCtrl.text.trim(),
+      source: AppConstants.srcSubsidy,
       createdAt: DateTime.now().toIso8601String(),
     );
     try {
@@ -437,9 +464,9 @@ class _AddSubsidyScreenState extends State<AddSubsidyScreen> {
             Container(
               padding: const EdgeInsets.all(14),
               decoration: BoxDecoration(
-                color: AppColors.gold.withOpacity(0.08),
+                color: AppColors.gold.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.gold.withOpacity(0.3)),
+                border: Border.all(color: AppColors.gold.withValues(alpha: 0.3)),
               ),
               child: const Row(
                 children: [

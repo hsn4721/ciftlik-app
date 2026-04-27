@@ -2,95 +2,393 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ─── Yardımcı fonksiyonlar ────────────────────────────────────────────────
+    // ─── Yardımcı fonksiyonlar (Multi-tenant) ─────────────────────────────────
 
     function isAuthenticated() {
       return request.auth != null;
     }
 
-    function currentUserDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
-    }
-
+    // Kullanıcının bu çiftlikte aktif üyeliği var mı?
     function belongsToFarm(farmId) {
       return isAuthenticated() &&
-             exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-             currentUserDoc().farmId == farmId &&
-             currentUserDoc().isActive == true;
+             exists(/databases/$(database)/documents/users/$(request.auth.uid)/memberships/$(farmId)) &&
+             get(/databases/$(database)/documents/users/$(request.auth.uid)/memberships/$(farmId)).data.isActive == true;
     }
 
-    function isOwnerOrPartner(farmId) {
+    // Bu çiftlikteki rolü
+    function membershipRole(farmId) {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)/memberships/$(farmId)).data.role;
+    }
+
+    // Tam yetki — owner veya assistant
+    function hasFullControl(farmId) {
       return belongsToFarm(farmId) &&
-             (currentUserDoc().role == 'owner' || currentUserDoc().role == 'partner');
+             (membershipRole(farmId) == 'owner' || membershipRole(farmId) == 'assistant');
+    }
+
+    function isVetInFarm(farmId) {
+      return belongsToFarm(farmId) && membershipRole(farmId) == 'vet';
+    }
+
+    function isWorkerInFarm(farmId) {
+      return belongsToFarm(farmId) && membershipRole(farmId) == 'worker';
+    }
+
+    function isPartnerInFarm(farmId) {
+      return belongsToFarm(farmId) && membershipRole(farmId) == 'partner';
+    }
+
+    // Geriye uyumluluk alias
+    function isOwnerOrPartner(farmId) {
+      return hasFullControl(farmId);
+    }
+
+    // ─── Subscription doğrulama yardımcıları ─────────────────────────────────
+    // Kabul edilen plan değerleri (SubscriptionPlan enum ile birebir).
+    function isValidFarmPlan(plan) {
+      return plan in ['none', 'trial', 'starter', 'family', 'pro'];
+    }
+
+    // Vet user-level subscription — sadece 'vet' veya 'none' geçerli.
+    function isValidVetPlan(plan) {
+      return plan in ['none', 'vet'];
+    }
+
+    // Trial dışındaki tüm planlar productId zorunlu (mağaza kaynaklı).
+    // Trial owner-only ücretsiz akışta productId=null kabul edilir.
+    function hasValidProductIdForPlan(data) {
+      return data.plan in ['none', 'trial']
+        || (data.get('productId', null) is string &&
+            data.productId.matches('^ciftlikpro_(starter|family|pro|vet)_(monthly|yearly)$'));
+    }
+
+    // Subscription doc field whitelist (client'ın yazabileceği alanlar).
+    // serverValidated bilerek dışlanmıştır — yalnızca Cloud Function bunu set eder.
+    function hasOnlyAllowedSubscriptionKeys(data) {
+      return data.keys().hasOnly([
+        'plan', 'status', 'startedAt', 'expiresAt', 'autoRenew',
+        'productId', 'platform', 'transactionId', 'receipt',
+        'paidByUid', 'updatedAt'
+      ]);
     }
 
     // ─── Kullanıcılar ─────────────────────────────────────────────────────────
     match /users/{userId} {
-      // Herkes kendi kaydını okuyabilir
-      allow read: if isAuthenticated() && request.auth.uid == userId;
-      // Kendi kaydını sadece owner/partner güncelleyebilir (inviteUser)
-      allow write: if isAuthenticated() &&
-                     (request.auth.uid == userId ||
-                      (exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-                       (currentUserDoc().role == 'owner' || currentUserDoc().role == 'partner')));
+      // Kendi profilini herkes okuyabilir. Başka kullanıcıları çiftlik paylaşan
+      // üyeler okuyabilir (member list görüntüleme). Çok çiftlikli yapıda: aynı
+      // çiftlikte aktif üyelik paylaşıyorlarsa.
+      allow read: if isAuthenticated() &&
+                    (request.auth.uid == userId ||
+                     // Aktif üyeliği olan herkes — multi-farm'da çok gevşek kalmasın diye
+                     // istek gönderen kendi aktif çiftliği bilmek zorunda olmadığı için
+                     // kendi profilini okuyabilir artı ekran-bazlı query'ler `farms/*/members`
+                     // üzerinden daha sıkı kontrollü.
+                     exists(/databases/$(database)/documents/users/$(request.auth.uid)));
+
+      // Kayıt oluşturma: kendisi VEYA owner/assistant davet ettiği yeni kullanıcı
+      // için oluşturuyor (inviteUserWithPassword akışı).
+      allow create: if isAuthenticated() && (
+                      request.auth.uid == userId ||
+                      (request.resource.data.activeFarmId != null &&
+                       hasFullControl(request.resource.data.activeFarmId))
+                    );
+      // Güncelleme:
+      //  - Kendi profili (tam yetki)
+      //  - VEYA Ana Sahip/Yardımcı bu kullanıcının aktif çiftliğini yönetiyorsa
+      //    yalnızca `displayName` alanını güncelleyebilir (bilgi düzenleme akışı).
+      allow update: if isAuthenticated() && (
+                      request.auth.uid == userId ||
+                      (resource.data.activeFarmId != null &&
+                       hasFullControl(resource.data.activeFarmId) &&
+                       request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['displayName']))
+                    );
+      // Silme:
+      //  - Kendi hesabı VEYA
+      //  - Owner/Assistant: kullanıcının aktif çiftliği bizim çiftliğimizse
+      //    (deleteUser akışında orphan cleanup için)
+      allow delete: if isAuthenticated() && (
+                      request.auth.uid == userId ||
+                      (resource.data.activeFarmId != null &&
+                       hasFullControl(resource.data.activeFarmId))
+                    );
+
+      // Kullanıcının üyelik subcollection'ı. Kendisi okur ve (sadece yoksa) oluşturabilir.
+      // Owner/Assistant ise aynı çiftliğe ait membership yazabilir (kullanıcı ekle/sil senaryosu).
+      match /memberships/{farmId} {
+        allow read: if isAuthenticated() && request.auth.uid == userId;
+        // Kendi üyeliğini yazabilir (davet kabul ederken)
+        allow create, update: if isAuthenticated() &&
+                                (request.auth.uid == userId || hasFullControl(farmId));
+        allow delete: if isAuthenticated() &&
+                        (request.auth.uid == userId || hasFullControl(farmId));
+      }
+
+      // Abonelik state (vet user-level — multi-farm).
+      // Sadece kendisi okur/yazar; plan değerleri 'none' veya 'vet' ile sınırlı.
+      // paidByUid kendi UID'i olmak zorunda. Receipt validation için
+      // Cloud Function ileride `serverValidated` bayrağını set edecek
+      // (client bu alanı yazamaz — keys whitelist dışında).
+      match /subscription/{docId} {
+        allow read: if isAuthenticated() && request.auth.uid == userId;
+        allow create, update: if isAuthenticated()
+          && request.auth.uid == userId
+          && hasOnlyAllowedSubscriptionKeys(request.resource.data)
+          && isValidVetPlan(request.resource.data.plan)
+          && hasValidProductIdForPlan(request.resource.data)
+          && (request.resource.data.get('paidByUid', null) == null
+              || request.resource.data.paidByUid == request.auth.uid);
+        allow delete: if isAuthenticated() && request.auth.uid == userId;
+      }
+    }
+
+    // ─── CollectionGroup memberships query rule ─────────────────────
+    // Owner çiftlik silme akışında diğer kullanıcıların membership'lerini
+    // temizler — tüm farm'ın owner'ı bu collectionGroup üzerinde okuma yapar.
+    // Yazımı sadece sahibi olduğu doc'a sınırlı (ana rule).
+    match /{path=**}/memberships/{farmId} {
+      allow read: if isAuthenticated() && hasFullControl(farmId);
     }
 
     // ─── Çiftlikler ───────────────────────────────────────────────────────────
     match /farms/{farmId} {
-      // İlk kayıt: kimliği doğrulanmış kullanıcı kendi UID'siyle yeni çiftlik oluşturabilir
+      // Yeni çiftlik oluşturma: kullanıcı kendi UID'siyle
       allow create: if isAuthenticated() && request.resource.data.ownerId == request.auth.uid;
-      allow read, update, delete: if belongsToFarm(farmId);
+      allow read: if belongsToFarm(farmId);
+      allow update, delete: if hasFullControl(farmId);
 
-      // Hayvanlar
+      // ─── Üye listesi (çiftlik bazlı ayna) ─────────────────────────────────
+      // Owner/Assistant CRUD. Üye kendi mirror doc'unu oluşturabilir
+      // (registerFarm + invitation accept akışında zorunlu).
+      // Update'te `role`/`isActive` gibi yetki alanlarına self-edit yasak —
+      // sadece profil bilgileri (displayName/phone/notes/avatarUrl).
+      // Gerçek izinler `users/{uid}/memberships/{farmId}` tarafından kontrol
+      // ediliyor; bu doc sadece çiftlik içi görünüm aynası.
+      match /members/{uid} {
+        allow read: if belongsToFarm(farmId);
+        allow create: if hasFullControl(farmId) || request.auth.uid == uid;
+        allow delete: if hasFullControl(farmId);
+        allow update: if hasFullControl(farmId)
+          || (request.auth.uid == uid &&
+              request.resource.data.diff(resource.data).affectedKeys()
+                .hasOnly(['displayName', 'phone', 'notes', 'avatarUrl', 'updatedAt']));
+      }
+
+      // ─── Hayvanlar ─────────────────────────────────────────────────────────
       match /animals/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow create: if hasFullControl(farmId) || isWorkerInFarm(farmId);
+        allow update, delete: if hasFullControl(farmId);
       }
-      // Buzağılar
+
       match /calves/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow create: if hasFullControl(farmId) || isWorkerInFarm(farmId);
+        allow update, delete: if hasFullControl(farmId);
       }
-      // Süt kayıtları
+
+      // ─── Süt kayıtları ────────────────────────────────────────────────────
       match /milking/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow create: if hasFullControl(farmId) || isWorkerInFarm(farmId);
+        allow update, delete: if hasFullControl(farmId);
       }
-      // Toplu sağım
+
       match /bulk_milking/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow create: if hasFullControl(farmId) || isWorkerInFarm(farmId);
+        allow update, delete: if hasFullControl(farmId);
       }
-      // Sağlık
+
+      // ─── Sağlık & Aşı ─────────────────────────────────────────────────────
       match /health/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow write: if hasFullControl(farmId) || isVetInFarm(farmId);
       }
-      // Aşılar
+
       match /vaccines/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow write: if hasFullControl(farmId) || isVetInFarm(farmId);
       }
-      // Finans — sadece owner/partner görebilir
+
+      // ─── Finans ────────────────────────────────────────────────────────────
       match /finance/{docId} {
-        allow read, write: if isOwnerOrPartner(farmId);
+        allow read: if hasFullControl(farmId) || isPartnerInFarm(farmId);
+        allow write: if hasFullControl(farmId);
       }
-      // Yem stokları
+
+      // ─── Yem ──────────────────────────────────────────────────────────────
       match /feed_stock/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow write: if hasFullControl(farmId);
       }
-      // Yem hareketleri
+
       match /feed_transactions/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if belongsToFarm(farmId);
+        allow create: if hasFullControl(farmId) || isWorkerInFarm(farmId);
+        allow update, delete: if hasFullControl(farmId);
       }
-      // Ekipmanlar
+
+      // ─── Ekipman ──────────────────────────────────────────────────────────
       match /equipment/{docId} {
-        allow read, write: if belongsToFarm(farmId);
+        allow read: if hasFullControl(farmId) || isPartnerInFarm(farmId);
+        allow write: if hasFullControl(farmId);
       }
-      // Personel — sadece owner/partner
+
+      // ─── Personel ─────────────────────────────────────────────────────────
       match /staff/{docId} {
-        allow read, write: if isOwnerOrPartner(farmId);
+        allow read: if hasFullControl(farmId) || isPartnerInFarm(farmId);
+        allow write: if hasFullControl(farmId);
       }
+
+      // ─── Bildirim Paneli ──────────────────────────────────────────────────
+      // Owner/Assistant'a gelen çiftlik-içi bildirimler (davet cevapları, vet
+      // read receipts, vb.). `targetUids` listesindekiler okuyabilir, her
+      // kullanıcı kendi "okundu" kaydını `readByUids`'e ekleyerek tutar.
+      match /notifications/{notifId} {
+        allow read: if isAuthenticated() &&
+                       request.auth.uid in resource.data.targetUids;
+        // Yazım: aynı çiftliğin üyesi herkes bildirim oluşturabilir
+        // (ör. vet kendi çiftliğindeki owner'a yazar)
+        allow create: if isAuthenticated() &&
+                        belongsToFarm(farmId) &&
+                        request.resource.data.farmId == farmId;
+        // Güncelleme: yalnızca targetUids'teki biri readByUids'i genişletebilir
+        allow update: if isAuthenticated() &&
+                        request.auth.uid in resource.data.targetUids &&
+                        request.resource.data.diff(resource.data).affectedKeys()
+                          .hasOnly(['readByUids']);
+        allow delete: if hasFullControl(farmId);
+      }
+
+      // ─── Görevler ─────────────────────────────────────────────────────────
+      // Owner/Assistant CRUD. Atanan personel kendi görevini okur ve yalnızca
+      // status + completionNote + completedAt alanlarını güncelleyebilir.
+      match /tasks/{taskId} {
+        allow read: if belongsToFarm(farmId);
+        allow create, delete: if hasFullControl(farmId);
+        allow update: if hasFullControl(farmId) ||
+                         (resource.data.assignedToUid == request.auth.uid &&
+                          request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['status', 'completionNote', 'completedAt']));
+      }
+
+      // ─── İzin Talepleri ───────────────────────────────────────────────────
+      // Personel kendi talebini oluşturur/okur, pending ise silebilir.
+      // Owner/Assistant tüm talepleri yönetir (onay/red).
+      match /leave_requests/{requestId} {
+        allow read: if hasFullControl(farmId) ||
+                       (belongsToFarm(farmId) &&
+                        resource.data.staffUid == request.auth.uid);
+        allow create: if belongsToFarm(farmId) &&
+                         request.resource.data.staffUid == request.auth.uid &&
+                         request.resource.data.farmId == farmId &&
+                         request.resource.data.status == 'pending';
+        allow update: if hasFullControl(farmId);
+        allow delete: if hasFullControl(farmId) ||
+                         (resource.data.staffUid == request.auth.uid &&
+                          resource.data.status == 'pending');
+      }
+
+      // ─── Çiftlik Aboneliği ────────────────────────────────────────────────
+      // Owner satın alır, tüm çiftlik üyeleri (assistant/partner/worker) okur.
+      // Vet aboneliği bu yolda DEĞİL — vet için users/{uid}/subscription kullanılır.
+      //
+      // Yazma kuralları (security hardening):
+      //  - Sadece full control (owner/assistant) yazabilir
+      //  - Plan field whitelist'te bir değer olmak zorunda
+      //  - Trial dışı planlar geçerli mağaza productId taşımak zorunda
+      //  - paidByUid varsa istek sahibinin UID'i olmalı
+      //  - serverValidated alanı keys whitelist dışında — sadece Cloud Function set eder
+      //
+      // **Production NOT'u**: Apple/Google receipt'in gerçekten geçerli
+      // olduğunu doğrulayan Cloud Function (Faz 13) eklenmeden önce
+      // bu kural client'ın trivial bypass denemelerini bloklar; tam
+      // güvenlik için server-side receipt validation şart.
+      match /subscription/{docId} {
+        allow read: if belongsToFarm(farmId);
+        allow create, update: if hasFullControl(farmId)
+          && hasOnlyAllowedSubscriptionKeys(request.resource.data)
+          && isValidFarmPlan(request.resource.data.plan)
+          && hasValidProductIdForPlan(request.resource.data)
+          && (request.resource.data.get('paidByUid', null) == null
+              || request.resource.data.paidByUid == request.auth.uid);
+        allow delete: if hasFullControl(farmId);
+      }
+
+      // ─── Veteriner Talepleri ──────────────────────────────────────────────
+      match /vet_requests/{docId} {
+        allow read: if belongsToFarm(farmId) && (
+                       hasFullControl(farmId) ||
+                       resource.data.vetId == request.auth.uid ||
+                       resource.data.requesterId == request.auth.uid
+                     );
+        allow create: if hasFullControl(farmId) &&
+                        request.resource.data.requesterId == request.auth.uid &&
+                        request.resource.data.farmId == farmId;
+        allow update: if belongsToFarm(farmId) && (
+                         hasFullControl(farmId) ||
+                         (resource.data.vetId == request.auth.uid &&
+                          request.resource.data.diff(resource.data).affectedKeys()
+                            .hasOnly(['readAt']))
+                       );
+        allow delete: if hasFullControl(farmId);
+      }
+    }
+
+    // ─── Collection Group rules ───────────────────────────────────────────────
+    // vet_requests collection group — vet'in tüm çiftliklerdeki taleplerini
+    // sorgulayabilmesi için. Nested rule (/farms/.../vet_requests) da çalışmaya
+    // devam eder; bu kural yalnızca collectionGroup query'leri için gerekli.
+    //
+    // **NOT**: Bu kural sadece vetId/requesterId kontrolü yapar — `belongsToFarm`
+    // koşulu kaldırıldı çünkü collection group query'de auxiliary doc lookup
+    // (memberships) timing race'ine yol açıyordu (yeni davet kabul eden vet
+    // permission-denied alıyordu). Çiftlikten çıkarılan vet'in eski talepleri
+    // görmemesi için **Cloud Function (Faz 13)** ile vet_request docs'a soft-delete
+    // veya targetUids alanı eklenmeli.
+    match /{path=**}/vet_requests/{docId} {
+      allow read: if isAuthenticated() && (
+                     resource.data.vetId == request.auth.uid ||
+                     resource.data.requesterId == request.auth.uid
+                   );
+    }
+
+    // ─── Davetler ─────────────────────────────────────────────────────────────
+    // Davet edilen kullanıcı kendi email'ine gelen davetleri okur + cevap verir.
+    // Davet oluşturan (owner/assistant) kendi çiftliğine ait davetleri yönetir.
+    match /invitations/{inviteId} {
+      allow read: if isAuthenticated() && (
+                     // Email eşleşmesi — davet edilen kişi
+                     (request.auth.token.email != null &&
+                      resource.data.email == request.auth.token.email.lower()) ||
+                     // Çiftlik sahibi — davet gönderdiği çiftliğin daveti
+                     hasFullControl(resource.data.farmId)
+                   );
+
+      allow create: if isAuthenticated() &&
+                      hasFullControl(request.resource.data.farmId) &&
+                      request.resource.data.invitedBy == request.auth.uid &&
+                      request.resource.data.status == 'pending';
+
+      allow update: if isAuthenticated() && (
+                       // Owner davet iptal eder
+                       hasFullControl(resource.data.farmId) ||
+                       // Davet edilen kabul/red — yalnızca status + respondedAt +
+                       // acceptedByUid + responderName değiştirilebilir
+                       (request.auth.token.email != null &&
+                        resource.data.email == request.auth.token.email.lower() &&
+                        request.resource.data.diff(resource.data).affectedKeys()
+                          .hasOnly(['status', 'respondedAt', 'acceptedByUid', 'responderName']))
+                     );
+
+      allow delete: if isAuthenticated() && hasFullControl(resource.data.farmId);
     }
 
     // ─── Geri Bildirimler ─────────────────────────────────────────────────────
     match /feedback/{docId} {
       allow create: if isAuthenticated();
-      allow read, update, delete: if false; // Sadece Firebase Console
+      allow read, update, delete: if false;
     }
   }
 }

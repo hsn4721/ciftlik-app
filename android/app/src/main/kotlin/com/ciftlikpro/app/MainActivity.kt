@@ -1,5 +1,6 @@
 package com.ciftlikpro.app
 
-import io.flutter.embedding.android.FlutterActivity
+import io.flutter.embedding.android.FlutterFragmentActivity
 
-class MainActivity : FlutterActivity()
+// local_auth biyometrik prompt için FragmentActivity gerektirir.
+class MainActivity : FlutterFragmentActivity()

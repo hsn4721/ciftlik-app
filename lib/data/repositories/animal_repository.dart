@@ -1,12 +1,12 @@
 import '../local/database_helper.dart';
 import '../models/animal_model.dart';
-import '../models/finance_model.dart';
 import '../../core/constants/app_constants.dart';
-import 'finance_repository.dart';
+import '../../core/services/activity_logger.dart';
+import '../../core/services/finance_linker.dart';
 
 class AnimalRepository {
   final _db = DatabaseHelper.instance;
-  final _financeRepo = FinanceRepository();
+  final _linker = FinanceLinker.instance;
 
   Future<int> insert(AnimalModel animal) async {
     final db = await _db.database;
@@ -16,21 +16,31 @@ class AnimalRepository {
     if (animal.entryType == 'Satın Alma' &&
         animal.purchasePrice != null &&
         animal.purchasePrice! > 0) {
-      try {
-        final label = animal.name != null && animal.name!.isNotEmpty
-            ? '${animal.name} (${animal.earTag})'
-            : animal.earTag;
-        await _financeRepo.insert(FinanceModel(
-          type: AppConstants.expense,
-          category: AppConstants.expenseAnimal,
-          amount: animal.purchasePrice!,
-          date: animal.entryDate,
-          description: 'Hayvan alımı — $label ${animal.breed}',
-          notes: 'Otomatik - Sürü Modülü',
-          createdAt: DateTime.now().toIso8601String(),
-        ));
-      } catch (_) {}
+      final label = animal.name != null && animal.name!.isNotEmpty
+          ? '${animal.name} (${animal.earTag})'
+          : animal.earTag;
+      await _linker.link(
+        source: AppConstants.srcAnimalPurchase,
+        sourceRef: 'animal_purchase:$id',
+        type: AppConstants.expense,
+        category: AppConstants.expenseAnimal,
+        amount: animal.purchasePrice!,
+        date: animal.entryDate,
+        description: 'Hayvan alımı — $label ${animal.breed}',
+        relatedAnimalId: id,
+        notes: 'Otomatik - Sürü Modülü',
+      );
     }
+
+    // Aktivite logu (owner+assistant'a bildir)
+    final label = animal.name != null && animal.name!.isNotEmpty
+        ? '${animal.name} (${animal.earTag})'
+        : animal.earTag;
+    ActivityLogger.instance.log(
+      actionType: AppConstants.activityAnimalAdded,
+      description: 'Yeni hayvan ekledi: $label · ${animal.breed}',
+      relatedRef: 'animals:$id',
+    );
 
     return id;
   }
@@ -100,28 +110,42 @@ class AnimalRepository {
       'updatedAt': now,
     }, where: 'id = ?', whereArgs: [animal.id]);
 
-    // Satış ise → finansa otomatik gelir
+    // Satış ise → finansa otomatik gelir. Aynı hayvana tekrar çıkış işlemi
+    // yapılırsa (ör. yanlışlık düzeltmesi) sourceRef upsert yapacak.
+    final label = animal.name != null && animal.name!.isNotEmpty
+        ? '${animal.name} (${animal.earTag})'
+        : animal.earTag;
     if (reason == 'Satış' && exitPrice != null && exitPrice > 0) {
-      try {
-        final label = animal.name != null && animal.name!.isNotEmpty
-            ? '${animal.name} (${animal.earTag})'
-            : animal.earTag;
-        await _financeRepo.insert(FinanceModel(
-          type: AppConstants.income,
-          category: AppConstants.incomeAnimal,
-          amount: exitPrice,
-          date: today,
-          description: 'Hayvan satışı — $label ${animal.breed}',
-          relatedAnimalId: animal.id,
-          notes: 'Otomatik - Sürü Modülü',
-          createdAt: now,
-        ));
-      } catch (_) {}
+      await _linker.link(
+        source: AppConstants.srcAnimalSale,
+        sourceRef: 'animal_sale:${animal.id}',
+        type: AppConstants.income,
+        category: AppConstants.incomeAnimal,
+        amount: exitPrice,
+        date: today,
+        description: 'Hayvan satışı — $label ${animal.breed}',
+        relatedAnimalId: animal.id,
+        notes: 'Otomatik - Sürü Modülü',
+      );
+    } else if (reason != 'Satış') {
+      // Satış dışı çıkış — varsa önceki satış finans kaydını temizle
+      await _linker.unlink('animal_sale:${animal.id}');
     }
+
+    // Aktivite logu
+    ActivityLogger.instance.log(
+      actionType: AppConstants.activityAnimalRemoved,
+      description: 'Hayvan çıkışı yapıldı: $label · $reason'
+          '${exitPrice != null ? ' · ₺${exitPrice.toStringAsFixed(0)}' : ''}',
+      relatedRef: 'animals:${animal.id}',
+    );
   }
 
   Future<int> delete(int id) async {
     final db = await _db.database;
+    // Hayvan silinirse alım + satış finans kayıtlarını temizle
+    await _linker.unlink('animal_purchase:$id');
+    await _linker.unlink('animal_sale:$id');
     return await db.delete('animals', where: 'id = ?', whereArgs: [id]);
   }
 

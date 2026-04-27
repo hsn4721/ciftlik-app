@@ -1,12 +1,15 @@
-import 'package:flutter/material.dart';
+﻿import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../../core/theme/app_theme.dart';
 import '../../shared/widgets/module_header.dart';
 import '../../core/constants/app_constants.dart';
+import '../../core/services/auth_service.dart';
 import '../../data/models/feed_model.dart';
 import '../../data/repositories/feed_repository.dart';
 import '../../shared/widgets/empty_state.dart';
+import '../../shared/widgets/skeleton_loader.dart';
+import '../../shared/widgets/undo_snackbar.dart';
 
 class FeedScreen extends StatefulWidget {
   const FeedScreen({super.key});
@@ -199,8 +202,19 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
       ),
     );
     if (ok == true) {
+      final backup = s;
       await _repo.deleteStock(s.id!);
       _load();
+      if (mounted) {
+        UndoSnackbar.show(
+          context,
+          message: '${backup.name} stoğu silindi',
+          onUndo: () async {
+            await _repo.insertStock(backup);
+            _load();
+          },
+        );
+      }
     }
   }
 
@@ -235,17 +249,25 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
           ],
         ),
       ),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showAddMenu,
-        backgroundColor: AppColors.primaryGreen,
-        icon: const Icon(Icons.add, color: Colors.white),
-        label: const Text('Ekle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
-      ),
+      floatingActionButton: Builder(builder: (_) {
+        final u = AuthService.instance.currentUser;
+        // Worker yemleme uygulayabilir (FAB'deki menüde sadece "Yemleme Uygula" gösterir);
+        // stok ekleme owner+assistant. FAB'yi hep gösteriyoruz ama menü rol filtresi yapar.
+        if (u != null && !u.canAddFeedStock && !u.canApplyFeeding) {
+          return const SizedBox.shrink();
+        }
+        return FloatingActionButton.extended(
+          onPressed: _showAddMenu,
+          backgroundColor: AppColors.primaryGreen,
+          icon: const Icon(Icons.add, color: Colors.white),
+          label: const Text('Ekle', style: TextStyle(color: Colors.white, fontWeight: FontWeight.w700)),
+        );
+      }),
       body: Stack(
         children: [
           const ModuleBackground(pattern: ModulePattern.feed),
           _loading
-              ? const Center(child: CircularProgressIndicator(color: AppColors.primaryGreen))
+              ? const SkeletonList(itemCount: 6, itemHeight: 84)
               : RefreshIndicator(
                   color: AppColors.primaryGreen,
                   onRefresh: _load,
@@ -283,6 +305,11 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
   }
 
   Future<void> _showAddMenu() async {
+    final user = AuthService.instance.currentUser;
+    // Personel yalnızca manuel çıkış yapabilir — yem tüketimini günceller.
+    // Stok ekleme / alım girişi sadece Ana Sahip + Yardımcı'ya özel (maliyet vardır).
+    final canManageStock = user?.canAddFeedStock ?? true;
+
     final result = await showModalBottomSheet<String>(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -298,20 +325,22 @@ class _FeedScreenState extends State<FeedScreen> with SingleTickerProviderStateM
               padding: EdgeInsets.only(bottom: 8),
               child: Text('Ne eklemek istersiniz?', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
             ),
-            ListTile(
-              leading: _MenuIcon(Icons.inventory_2_outlined, AppColors.primaryGreen),
-              title: const Text('Yeni Stok Ekle', style: TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: const Text('Yeni yem türü tanımla', style: TextStyle(fontSize: 12)),
-              trailing: const Icon(Icons.chevron_right, color: AppColors.textGrey),
-              onTap: () => Navigator.pop(context, 'stock'),
-            ),
-            ListTile(
-              leading: _MenuIcon(Icons.add_shopping_cart, AppColors.infoBlue),
-              title: const Text('Yem Satın Alımı', style: TextStyle(fontWeight: FontWeight.w700)),
-              subtitle: const Text('Stoka yem girişi yap', style: TextStyle(fontSize: 12)),
-              trailing: const Icon(Icons.chevron_right, color: AppColors.textGrey),
-              onTap: () => Navigator.pop(context, 'buy'),
-            ),
+            if (canManageStock)
+              ListTile(
+                leading: _MenuIcon(Icons.inventory_2_outlined, AppColors.primaryGreen),
+                title: const Text('Yeni Stok Ekle', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Yeni yem türü tanımla', style: TextStyle(fontSize: 12)),
+                trailing: const Icon(Icons.chevron_right, color: AppColors.textGrey),
+                onTap: () => Navigator.pop(context, 'stock'),
+              ),
+            if (canManageStock)
+              ListTile(
+                leading: _MenuIcon(Icons.add_shopping_cart, AppColors.infoBlue),
+                title: const Text('Yem Satın Alımı', style: TextStyle(fontWeight: FontWeight.w700)),
+                subtitle: const Text('Stoka yem girişi yap', style: TextStyle(fontSize: 12)),
+                trailing: const Icon(Icons.chevron_right, color: AppColors.textGrey),
+                onTap: () => Navigator.pop(context, 'buy'),
+              ),
             ListTile(
               leading: _MenuIcon(Icons.remove_circle_outline, AppColors.errorRed),
               title: const Text('Manuel Çıkış', style: TextStyle(fontWeight: FontWeight.w700)),
@@ -376,14 +405,14 @@ class _StocksTab extends StatelessWidget {
             color: Colors.white,
             borderRadius: BorderRadius.circular(14),
             border: Border(left: BorderSide(color: statusColor, width: 4)),
-            boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 6, offset: const Offset(0, 2))],
+            boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6, offset: const Offset(0, 2))],
           ),
           child: Padding(
             padding: const EdgeInsets.all(14),
             child: Row(
               children: [
                 CircleAvatar(
-                  backgroundColor: statusColor.withOpacity(0.12),
+                  backgroundColor: statusColor.withValues(alpha: 0.12),
                   child: Icon(Icons.grass, color: statusColor, size: 22),
                 ),
                 const SizedBox(width: 12),
@@ -406,7 +435,8 @@ class _StocksTab extends StatelessWidget {
                         runSpacing: 4,
                         children: [
                           _InfoChip(Icons.scale_outlined, '${fmt.format(s.quantity)} ${s.unit}', AppColors.primaryGreen),
-                          if (s.unitPrice != null)
+                          if (s.unitPrice != null &&
+                              (AuthService.instance.currentUser?.canSeeFeedCost ?? true))
                             _InfoChip(Icons.attach_money, '${moneyFmt.format(s.unitPrice!)} ₺/${s.unit}', AppColors.infoBlue),
                           if (days != null && days >= 7)
                             _InfoChip(Icons.calendar_today_outlined, '$days gün', const Color(0xFF6B4EFF)),
@@ -483,7 +513,7 @@ class _FeedingTab extends StatelessWidget {
               Text(dateStr, style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w700, fontSize: 14)),
             ]),
             const Spacer(),
-            if (dailyCost > 0)
+            if (dailyCost > 0 && (AuthService.instance.currentUser?.canSeeFeedCost ?? true))
               Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
                 const Text('Günlük Maliyet', style: TextStyle(color: Colors.white70, fontSize: 11)),
                 Text('₺${moneyFmt.format(dailyCost)}', style: const TextStyle(color: Colors.white, fontWeight: FontWeight.w800, fontSize: 16)),
@@ -814,7 +844,8 @@ class _ConfirmFeedingSheetState extends State<_ConfirmFeedingSheet> {
                   // yem listesi
                   ...widget.plans.map((plan) {
                     final stock = widget.stocks.where((s) => s.id == plan.stockId).firstOrNull;
-                    final hasPrice = stock?.unitPrice != null;
+                    final canSeeCost = AuthService.instance.currentUser?.canSeeFeedCost ?? true;
+                    final hasPrice = stock?.unitPrice != null && canSeeCost;
                     return Container(
                       margin: const EdgeInsets.only(bottom: 10),
                       padding: const EdgeInsets.all(12),
@@ -862,8 +893,8 @@ class _ConfirmFeedingSheetState extends State<_ConfirmFeedingSheet> {
                     );
                   }),
 
-                  // maliyet özeti
-                  if (hasCost) ...[
+                  // maliyet özeti — personel görmez
+                  if (hasCost && (AuthService.instance.currentUser?.canSeeFeedCost ?? true)) ...[
                     const SizedBox(height: 4),
                     Container(
                       padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
@@ -905,8 +936,8 @@ class _ConfirmFeedingSheetState extends State<_ConfirmFeedingSheet> {
                         ]),
                       ),
                       Switch(
-                        value: _auto,
-                        activeColor: AppColors.primaryGreen,
+          value: _auto,
+          activeThumbColor: AppColors.primaryGreen,
                         onChanged: (v) {
                           setState(() => _auto = v);
                           widget.onAutoChanged(v);
@@ -1001,11 +1032,11 @@ class _HistoryTab extends StatelessWidget {
               color: Colors.white,
               borderRadius: BorderRadius.circular(10),
               border: Border(left: BorderSide(color: color, width: 3)),
-              boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04), blurRadius: 3)],
+              boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.04), blurRadius: 3)],
             ),
             child: ListTile(
               leading: CircleAvatar(
-                backgroundColor: color.withOpacity(0.1),
+                backgroundColor: color.withValues(alpha: 0.1),
                 child: Icon(icon, color: color, size: 18),
               ),
               title: Text(t.stockName, style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 14)),
@@ -1019,7 +1050,8 @@ class _HistoryTab extends StatelessWidget {
                     '${t.isEntry ? '+' : '-'}${fmt.format(t.quantity)} ${t.unit}',
                     style: TextStyle(fontWeight: FontWeight.w700, color: color, fontSize: 13),
                   ),
-                  if (t.totalCost != null)
+                  if (t.totalCost != null &&
+                      (AuthService.instance.currentUser?.canSeeFeedCost ?? true))
                     Text('₺${moneyFmt.format(t.totalCost!)}',
                       style: const TextStyle(fontSize: 11, color: AppColors.textGrey)),
                 ],
@@ -1120,7 +1152,7 @@ class _EditFeedPlanScreenState extends State<EditFeedPlanScreen> {
                 Container(
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
-                    color: AppColors.primaryGreen.withOpacity(0.08),
+                    color: AppColors.primaryGreen.withValues(alpha: 0.08),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: const Row(children: [
@@ -1157,7 +1189,7 @@ class _PlanStockCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 6)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6)],
       ),
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -1170,7 +1202,7 @@ class _PlanStockCard extends StatelessWidget {
               Expanded(child: Text(stock.name, style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15))),
               Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                decoration: BoxDecoration(color: AppColors.primaryGreen.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+                decoration: BoxDecoration(color: AppColors.primaryGreen.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
                 child: Text(stock.type, style: const TextStyle(fontSize: 11, color: AppColors.primaryGreen, fontWeight: FontWeight.w600)),
               ),
             ]),
@@ -1229,7 +1261,7 @@ class _PlanField extends StatelessWidget {
             suffixText: unit,
             hintText: '0',
             contentPadding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: color.withOpacity(0.3))),
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: color.withValues(alpha: 0.3))),
             focusedBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(10), borderSide: BorderSide(color: color)),
           ),
         ),
@@ -1347,9 +1379,9 @@ class _AddFeedStockScreenState extends State<AddFeedStockScreen> {
               padding: const EdgeInsets.all(12),
               margin: const EdgeInsets.only(bottom: 16),
               decoration: BoxDecoration(
-                color: AppColors.primaryGreen.withOpacity(0.08),
+                color: AppColors.primaryGreen.withValues(alpha: 0.08),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: AppColors.primaryGreen.withOpacity(0.2)),
+                border: Border.all(color: AppColors.primaryGreen.withValues(alpha: 0.2)),
               ),
               child: const Row(children: [
                 Icon(Icons.lightbulb_outline, color: AppColors.primaryGreen, size: 18),
@@ -1364,7 +1396,7 @@ class _AddFeedStockScreenState extends State<AddFeedStockScreen> {
             _FormCard(title: 'Yem Seçimi', children: [
               // Hazır liste
               DropdownButtonFormField<String>(
-                value: _selectedPreset,
+        initialValue: _selectedPreset,
                 isExpanded: true,
                 decoration: const InputDecoration(
                   labelText: 'Yem Adı *',
@@ -1381,7 +1413,7 @@ class _AddFeedStockScreenState extends State<AddFeedStockScreen> {
                         Container(
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                           decoration: BoxDecoration(
-                            color: AppColors.primaryGreen.withOpacity(0.1),
+                            color: AppColors.primaryGreen.withValues(alpha: 0.1),
                             borderRadius: BorderRadius.circular(6),
                           ),
                           child: Text(match['type']!, style: const TextStyle(fontSize: 10, color: AppColors.primaryGreen)),
@@ -1407,7 +1439,7 @@ class _AddFeedStockScreenState extends State<AddFeedStockScreen> {
 
               const SizedBox(height: 12),
               DropdownButtonFormField<String>(
-                value: _type,
+        initialValue: _type,
                 decoration: const InputDecoration(
                   labelText: 'Yem Kategorisi',
                   prefixIcon: Icon(Icons.category_outlined, color: AppColors.primaryGreen, size: 20),
@@ -1436,7 +1468,7 @@ class _AddFeedStockScreenState extends State<AddFeedStockScreen> {
                 const SizedBox(width: 12),
                 Expanded(
                   child: DropdownButtonFormField<String>(
-                    value: _unit,
+        initialValue: _unit,
                     decoration: const InputDecoration(labelText: 'Birim'),
                     items: AppConstants.feedUnits.map((u) => DropdownMenuItem(value: u, child: Text(u))).toList(),
                     onChanged: (v) => setState(() => _unit = v!),
@@ -1707,9 +1739,9 @@ class _AddFeedTransactionScreenState extends State<AddFeedTransactionScreen> {
                 Container(
                   padding: const EdgeInsets.all(10),
                   decoration: BoxDecoration(
-                    color: color.withOpacity(0.06),
+                    color: color.withValues(alpha: 0.06),
                     borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: color.withOpacity(0.2)),
+                    border: Border.all(color: color.withValues(alpha: 0.2)),
                   ),
                   child: Row(children: [
                     Icon(Icons.inventory_2_outlined, color: color, size: 18),
@@ -1765,7 +1797,7 @@ class _AddFeedTransactionScreenState extends State<AddFeedTransactionScreen> {
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                     decoration: BoxDecoration(
-                      color: AppColors.primaryGreen.withOpacity(0.08),
+                      color: AppColors.primaryGreen.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(8),
                     ),
                     child: Row(children: [
@@ -1842,7 +1874,7 @@ class _FormCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Colors.white,
         borderRadius: BorderRadius.circular(14),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.06), blurRadius: 6)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.06), blurRadius: 6)],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -1884,7 +1916,7 @@ class _InfoChip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(8)),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(8)),
       child: Row(mainAxisSize: MainAxisSize.min, children: [
         Icon(icon, size: 12, color: color),
         const SizedBox(width: 3),
@@ -1903,7 +1935,7 @@ class _SessionBadge extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(8)),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.12), borderRadius: BorderRadius.circular(8)),
       child: Text(text, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w700)),
     );
   }
@@ -1918,7 +1950,7 @@ class _MenuIcon extends StatelessWidget {
   Widget build(BuildContext context) {
     return Container(
       padding: const EdgeInsets.all(8),
-      decoration: BoxDecoration(color: color.withOpacity(0.1), borderRadius: BorderRadius.circular(10)),
+      decoration: BoxDecoration(color: color.withValues(alpha: 0.1), borderRadius: BorderRadius.circular(10)),
       child: Icon(icon, color: color),
     );
   }
