@@ -74,16 +74,16 @@ service cloud.firestore {
 
     // ─── Kullanıcılar ─────────────────────────────────────────────────────────
     match /users/{userId} {
-      // Kendi profilini herkes okuyabilir. Başka kullanıcıları çiftlik paylaşan
-      // üyeler okuyabilir (member list görüntüleme). Çok çiftlikli yapıda: aynı
-      // çiftlikte aktif üyelik paylaşıyorlarsa.
+      // Kendi profilini herkes okuyabilir. Diğer kullanıcıların profili **yalnızca
+      // aynı çiftlikte aktif üyelik paylaşanlara** açık. Eski kural "auth olan
+      // herkes okuyabilir" idi → global PII leak (UID enumeration ile email/phone
+      // toplama). Yeni: owner/assistant aynı çiftliğin üyelerini görür; member
+      // listesi `farms/{farmId}/members` aynası üzerinden gösterilir, bu read
+      // yalnızca cross-farm reference verification içindir.
       allow read: if isAuthenticated() &&
                     (request.auth.uid == userId ||
-                     // Aktif üyeliği olan herkes — multi-farm'da çok gevşek kalmasın diye
-                     // istek gönderen kendi aktif çiftliği bilmek zorunda olmadığı için
-                     // kendi profilini okuyabilir artı ekran-bazlı query'ler `farms/*/members`
-                     // üzerinden daha sıkı kontrollü.
-                     exists(/databases/$(database)/documents/users/$(request.auth.uid)));
+                     (resource.data.activeFarmId != null &&
+                      belongsToFarm(resource.data.activeFarmId)));
 
       // Kayıt oluşturma: kendisi VEYA owner/assistant davet ettiği yeni kullanıcı
       // için oluşturuyor (inviteUserWithPassword akışı).
@@ -113,13 +113,37 @@ service cloud.firestore {
                        hasFullControl(resource.data.activeFarmId))
                     );
 
-      // Kullanıcının üyelik subcollection'ı. Kendisi okur ve (sadece yoksa) oluşturabilir.
-      // Owner/Assistant ise aynı çiftliğe ait membership yazabilir (kullanıcı ekle/sil senaryosu).
+      // Kullanıcının üyelik subcollection'ı.
+      //
+      // **Güvenlik kritik**: Eski kural `request.auth.uid == userId` self-write'a
+      // izin veriyordu — bu tüm multi-tenant izolasyonu kıran TAM TAKEOVER
+      // saldırı vektörüydü (kullanıcı `role:'owner'` doğrudan yazabilirdi).
+      //
+      // Yeni mantık:
+      //  - **Create**: Owner/Assistant (`hasFullControl`) davet eden taraf,
+      //    veya self yalnızca **yeni çiftlik kuran owner** (farmDoc.ownerId
+      //    == auth.uid).
+      //  - **Update**: Owner/Assistant her şey, self ise yalnızca **role
+      //    değişmediği** durumda (idempotent merge davet kabul akışı için).
+      //  - **Delete**: Self veya owner.
+      //
+      // Davet akışı bozulmuyor: `inviteUserWithPassword` (auth_service.dart:840)
+      // zaten OWNER SDK'sıyla bu doc'u pre-create ediyor; davet kabul eden
+      // kullanıcı sadece status flip yapar, idempotent merge update geçer.
       match /memberships/{farmId} {
         allow read: if isAuthenticated() && request.auth.uid == userId;
-        // Kendi üyeliğini yazabilir (davet kabul ederken)
-        allow create, update: if isAuthenticated() &&
-                                (request.auth.uid == userId || hasFullControl(farmId));
+        allow create: if isAuthenticated() && (
+          hasFullControl(farmId) ||
+          (request.auth.uid == userId &&
+           request.resource.data.role == 'owner' &&
+           exists(/databases/$(database)/documents/farms/$(farmId)) &&
+           get(/databases/$(database)/documents/farms/$(farmId)).data.ownerId == userId)
+        );
+        allow update: if isAuthenticated() && (
+          hasFullControl(farmId) ||
+          (request.auth.uid == userId &&
+           request.resource.data.role == resource.data.role)
+        );
         allow delete: if isAuthenticated() &&
                         (request.auth.uid == userId || hasFullControl(farmId));
       }
@@ -131,11 +155,15 @@ service cloud.firestore {
       // (client bu alanı yazamaz — keys whitelist dışında).
       match /subscription/{docId} {
         allow read: if isAuthenticated() && request.auth.uid == userId;
+        // Vet user-level subscription: client yalnızca 'none' yazabilir
+        // (kayıt sırasında veya iptal sonrası). 'vet' planı için ödeme zorunlu
+        // ve Cloud Function `validateReceipt` admin SDK ile yazılır.
         allow create, update: if isAuthenticated()
           && request.auth.uid == userId
           && hasOnlyAllowedSubscriptionKeys(request.resource.data)
           && isValidVetPlan(request.resource.data.plan)
           && hasValidProductIdForPlan(request.resource.data)
+          && request.resource.data.plan == 'none'
           && (request.resource.data.get('paidByUid', null) == null
               || request.resource.data.paidByUid == request.auth.uid);
         allow delete: if isAuthenticated() && request.auth.uid == userId;
@@ -166,12 +194,23 @@ service cloud.firestore {
       // ediliyor; bu doc sadece çiftlik içi görünüm aynası.
       match /members/{uid} {
         allow read: if belongsToFarm(farmId);
-        allow create: if hasFullControl(farmId) || request.auth.uid == uid;
+        // Self-create yalnızca **yeni çiftlik kuran owner** için izinli.
+        // Davet akışında ayna doc'u OWNER tarafından `inviteUserWithPassword`
+        // (auth_service.dart:847) batch'inde yazılır — davet edilen kullanıcı
+        // ayna create izinli değil (privilege escalation engeli).
+        allow create: if hasFullControl(farmId) ||
+          (request.auth.uid == uid &&
+           request.resource.data.role == 'owner' &&
+           exists(/databases/$(database)/documents/farms/$(farmId)) &&
+           get(/databases/$(database)/documents/farms/$(farmId)).data.ownerId == uid);
         allow delete: if hasFullControl(farmId);
+        // Update: owner/assistant her şey; self ise YA idempotent merge
+        // (role+isActive değişmedi) YA da yalnızca profil alanları
+        // (displayName/phone/notes/avatarUrl/updatedAt) değişiyor.
         allow update: if hasFullControl(farmId)
           || (request.auth.uid == uid &&
-              request.resource.data.diff(resource.data).affectedKeys()
-                .hasOnly(['displayName', 'phone', 'notes', 'avatarUrl', 'updatedAt']));
+              request.resource.data.role == resource.data.role &&
+              request.resource.data.isActive == resource.data.isActive);
       }
 
       // ─── Hayvanlar ─────────────────────────────────────────────────────────
@@ -246,15 +285,20 @@ service cloud.firestore {
       // read receipts, vb.). `targetUids` listesindekiler okuyabilir, her
       // kullanıcı kendi "okundu" kaydını `readByUids`'e ekleyerek tutar.
       match /notifications/{notifId} {
+        // Read: hem `targetUids`'te olmalı hem de o çiftliğin **aktif üyesi**
+        // (cross-farm leak engeli — eski vet sahte targetUid eklemesini cover'lar).
         allow read: if isAuthenticated() &&
+                       belongsToFarm(farmId) &&
                        request.auth.uid in resource.data.targetUids;
-        // Yazım: aynı çiftliğin üyesi herkes bildirim oluşturabilir
-        // (ör. vet kendi çiftliğindeki owner'a yazar)
+        // Create: yalnızca owner/assistant veya vet kendi çiftliğine yazabilir.
+        // Worker/partner notification YAZAMAZ (phishing surface daraltıldı).
+        // farmId path eşleşmesi zorunlu (cross-farm injection engeli).
         allow create: if isAuthenticated() &&
-                        belongsToFarm(farmId) &&
-                        request.resource.data.farmId == farmId;
+                        request.resource.data.farmId == farmId &&
+                        (hasFullControl(farmId) || isVetInFarm(farmId));
         // Güncelleme: yalnızca targetUids'teki biri readByUids'i genişletebilir
         allow update: if isAuthenticated() &&
+                        belongsToFarm(farmId) &&
                         request.auth.uid in resource.data.targetUids &&
                         request.resource.data.diff(resource.data).affectedKeys()
                           .hasOnly(['readByUids']);
@@ -307,10 +351,16 @@ service cloud.firestore {
       // güvenlik için server-side receipt validation şart.
       match /subscription/{docId} {
         allow read: if belongsToFarm(farmId);
+        // Client yalnızca 'trial' veya 'none' yazabilir. Diğer planlar (starter,
+        // family, pro) yalnızca Cloud Function `validateReceipt` admin SDK ile
+        // yazılır (admin SDK rules'ı bypass eder, `serverValidated:true` set eder).
+        // `serverValidated` field whitelist'te olmadığı için client zaten yazamaz —
+        // bu kural client'ın `plan:'pro'` paywall bypass denemelerini bloklar.
         allow create, update: if hasFullControl(farmId)
           && hasOnlyAllowedSubscriptionKeys(request.resource.data)
           && isValidFarmPlan(request.resource.data.plan)
           && hasValidProductIdForPlan(request.resource.data)
+          && request.resource.data.plan in ['none', 'trial']
           && (request.resource.data.get('paidByUid', null) == null
               || request.resource.data.paidByUid == request.auth.uid);
         allow delete: if hasFullControl(farmId);
@@ -348,7 +398,11 @@ service cloud.firestore {
     // görmemesi için **Cloud Function (Faz 13)** ile vet_request docs'a soft-delete
     // veya targetUids alanı eklenmeli.
     match /{path=**}/vet_requests/{docId} {
-      allow read: if isAuthenticated() && (
+      // Çiftlikten çıkarılan vet'in eski talepleri görmemesi için
+      // `user-cleanup.ts` benzeri bir trigger doc'a `archived: true` set eder
+      // (vet revoke akışı). Bu flag varsa read reject — eski snapshot leak engeli.
+      allow read: if isAuthenticated() &&
+                     resource.data.get('archived', false) != true && (
                      resource.data.vetId == request.auth.uid ||
                      resource.data.requesterId == request.auth.uid
                    );
@@ -366,20 +420,29 @@ service cloud.firestore {
                      hasFullControl(resource.data.farmId)
                    );
 
+      // Create: owner/assistant kendi çiftliğine davet gönderir.
+      // **Role whitelist**: 'owner' davet edilemez (self-promotion engeli);
+      // sadece assistant/partner/vet/worker.
       allow create: if isAuthenticated() &&
                       hasFullControl(request.resource.data.farmId) &&
                       request.resource.data.invitedBy == request.auth.uid &&
-                      request.resource.data.status == 'pending';
+                      request.resource.data.status == 'pending' &&
+                      request.resource.data.role in
+                        ['assistant', 'partner', 'vet', 'worker'];
 
       allow update: if isAuthenticated() && (
                        // Owner davet iptal eder
                        hasFullControl(resource.data.farmId) ||
                        // Davet edilen kabul/red — yalnızca status + respondedAt +
-                       // acceptedByUid + responderName değiştirilebilir
+                       // acceptedByUid + responderName değiştirilebilir.
+                       // **acceptedByUid kendi UID'i olmalı** (başka kullanıcının
+                       // UID'iyle accept edip role hijack engeli).
                        (request.auth.token.email != null &&
                         resource.data.email == request.auth.token.email.lower() &&
                         request.resource.data.diff(resource.data).affectedKeys()
-                          .hasOnly(['status', 'respondedAt', 'acceptedByUid', 'responderName']))
+                          .hasOnly(['status', 'respondedAt', 'acceptedByUid', 'responderName']) &&
+                        (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['acceptedByUid']) ||
+                         request.resource.data.acceptedByUid == request.auth.uid))
                      );
 
       allow delete: if isAuthenticated() && hasFullControl(resource.data.farmId);
@@ -389,6 +452,14 @@ service cloud.firestore {
     match /feedback/{docId} {
       allow create: if isAuthenticated();
       allow read, update, delete: if false;
+    }
+
+    // ─── IAP Transaction Ledger (yalnızca Cloud Functions Admin SDK) ──────────
+    // Family Sharing güvenliği için her receipt'in transactionId'si bu
+    // koleksiyonda kayıtlı tutulur — Cloud Function transaction ile yazar,
+    // client tarafının erişimi yoktur.
+    match /iap_transactions/{transactionId} {
+      allow read, write: if false;
     }
   }
 }

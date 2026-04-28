@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:url_launcher/url_launcher.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/design_system/ds.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/subscription/subscription_constants.dart';
@@ -286,13 +287,15 @@ class _SubscriptionSettingsScreenState extends State<SubscriptionSettingsScreen>
           spacing: 16,
           children: [
             GestureDetector(
-              onTap: () => launchUrl(Uri.parse('https://ciftlikpro.net/privacy')),
+              onTap: () => launchUrl(Uri.parse(AppConstants.privacyPolicyUrl),
+                  mode: LaunchMode.externalApplication),
               child: Text('Gizlilik Politikası',
                   style: DsTypography.caption(color: tokens.textSecondary)
                       .copyWith(decoration: TextDecoration.underline)),
             ),
             GestureDetector(
-              onTap: () => launchUrl(Uri.parse('https://ciftlikpro.net/terms')),
+              onTap: () => launchUrl(Uri.parse(AppConstants.termsOfServiceUrl),
+                  mode: LaunchMode.externalApplication),
               child: Text('Kullanım Şartları',
                   style: DsTypography.caption(color: tokens.textSecondary)
                       .copyWith(decoration: TextDecoration.underline)),

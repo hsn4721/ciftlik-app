@@ -93,7 +93,8 @@ class AuthService {
           debugPrint('[AuthService] user doc parse error: $e');
         }
       },
-      onError: (e) => debugPrint('[AuthService] user doc listener error: $e'),
+      onError: (Object e, StackTrace st) =>
+          AppLogger.error('AuthService.userDocListener', e, st),
     );
 
     // 2) Memberships subcollection — rol veya isActive değiştiğinde tetiklenir
@@ -130,7 +131,8 @@ class AuthService {
         await _cacheUser(_currentUser!);
         _userController.add(_currentUser);
       },
-      onError: (e) => debugPrint('[AuthService] memberships listener error: $e'),
+      onError: (Object e, StackTrace st) =>
+          AppLogger.error('AuthService.membershipsListener', e, st),
     );
   }
 

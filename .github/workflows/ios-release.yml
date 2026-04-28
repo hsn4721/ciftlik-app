@@ -37,11 +37,13 @@ jobs:
           mkdir -p ~/Library/MobileDevice/Provisioning\ Profiles
           echo "${{ secrets.PROVISIONING_PROFILE_BASE64 }}" | base64 --decode > ~/Library/MobileDevice/Provisioning\ Profiles/profile.mobileprovision
 
-      - name: Configure Xcode signing (Runner target only)
+      - name: Configure Xcode signing + privacy manifest (Runner target only)
         run: |
           ruby - <<'EOF'
           require 'xcodeproj'
           project = Xcodeproj::Project.open('ios/Runner.xcodeproj')
+
+          # Code signing config
           project.targets.each do |target|
             next unless target.name == 'Runner'
             target.build_configurations.each do |config|
@@ -52,6 +54,20 @@ jobs:
               config.build_settings['DEVELOPMENT_TEAM'] = ENV['APPLE_TEAM_ID']
             end
           end
+
+          # PrivacyInfo.xcprivacy'yi Runner target'in Resources build phase'ine
+          # ekle — Apple Mayıs 2024 zorunlu, manifest IPA'da olmazsa upload reject.
+          runner_target = project.targets.find { |t| t.name == 'Runner' }
+          runner_group = project.main_group.find_subpath('Runner', false)
+          if runner_group
+            privacy_ref = runner_group.files.find { |f| f.path == 'PrivacyInfo.xcprivacy' }
+            privacy_ref ||= runner_group.new_file('PrivacyInfo.xcprivacy')
+            resources_phase = runner_target.resources_build_phase
+            already_added = resources_phase.files.any? { |bf| bf.file_ref == privacy_ref }
+            resources_phase.add_file_reference(privacy_ref) unless already_added
+            puts "PrivacyInfo.xcprivacy linked to Runner Resources phase"
+          end
+
           project.save
           EOF
         env:

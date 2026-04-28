@@ -145,13 +145,23 @@ class WeatherService {
       '?lat=$latStr&lon=$lonStr&format=json&accept-language=tr',
     );
 
+    // 10 sn timeout + statusCode guard — Open-Meteo / Nominatim yanıt
+    // vermezse uygulama hava durumu kartında sonsuza kadar yüklenmesin.
+    const timeout = Duration(seconds: 10);
     final responses = await Future.wait([
-      http.get(weatherUri),
+      http.get(weatherUri).timeout(timeout),
       http.get(geoUri, headers: {
         'User-Agent': 'CiftlikPro/1.0',
         'Accept-Language': 'tr',
-      }),
+      }).timeout(timeout),
     ]);
+
+    if (responses[0].statusCode != 200) {
+      throw Exception('Hava durumu servisi yanıt vermedi (${responses[0].statusCode})');
+    }
+    if (responses[1].statusCode != 200) {
+      throw Exception('Konum servisi yanıt vermedi (${responses[1].statusCode})');
+    }
 
     final weatherData = jsonDecode(responses[0].body) as Map<String, dynamic>;
     final geoData = jsonDecode(responses[1].body) as Map<String, dynamic>;

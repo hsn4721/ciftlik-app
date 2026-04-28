@@ -35,7 +35,13 @@ class SubscriptionService extends ChangeNotifier {
   List<ProductDetails> _products = [];
   StreamSubscription<List<PurchaseDetails>>? _purchaseSub;
   StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>? _stateSub;
+  StreamSubscription<dynamic>? _userSub;
   SubscriptionState _state = SubscriptionState.empty();
+  // Listener'ın hangi user/farm context'inde kurulduğu — değişiklikte yeniden
+  // attach kararı için. (Vet user-level path, çiftlik kullanıcı farm-level path
+  // dinler; activeFarmId değişince eski farm'ın listener'ı kapatılır.)
+  String? _attachedUid;
+  String? _attachedFarmId;
 
   /// Trial bittiğinde tetiklenir — UI dinleyicisi (DashboardScreen) "Trial Bitti"
   /// dialog'u + paywall yönlendirmesi yapar. Listener kurulan widget tek seferlik
@@ -138,12 +144,26 @@ class SubscriptionService extends ChangeNotifier {
         await _loadProducts();
         _purchaseSub = _iap.purchaseStream.listen(
           _handlePurchaseUpdates,
-          onError: (e) => debugPrint('[SubscriptionService] purchaseStream error: $e'),
+          onError: (Object e, StackTrace st) =>
+              AppLogger.error('SubscriptionService.purchaseStream', e, st),
         );
       }
       await _attachStateListener();
-    } catch (e) {
-      debugPrint('[SubscriptionService.init] $e');
+
+      // AuthService user/farm değişikliği listener'ı — vet farm switch ya da
+      // çiftlik kullanıcı setActiveFarm yapınca subscription doc path'i değişir.
+      // Eski listener kapatılıp yeni context için yeniden bağlanması zorunlu;
+      // aksi halde kullanıcı eski farm'ın subscription'ını görür (gating bug).
+      _userSub = AuthService.instance.userStream.listen((_) async {
+        final user = AuthService.instance.currentUser;
+        final newUid = user?.uid;
+        final newFarm = user?.isVet == true ? null : user?.activeFarmId;
+        if (newUid != _attachedUid || newFarm != _attachedFarmId) {
+          await _attachStateListener();
+        }
+      });
+    } catch (e, st) {
+      AppLogger.error('SubscriptionService.init', e, st);
     }
     notifyListeners();
   }
@@ -153,11 +173,12 @@ class SubscriptionService extends ChangeNotifier {
     try {
       final response = await _iap.queryProductDetails(IapProductIds.allIds);
       if (response.error != null) {
-        debugPrint('[SubscriptionService] product query error: ${response.error}');
+        AppLogger.warn('SubscriptionService._loadProducts',
+            'product query error: ${response.error?.message}');
       }
       _products = response.productDetails;
-    } catch (e) {
-      debugPrint('[SubscriptionService._loadProducts] $e');
+    } catch (e, st) {
+      AppLogger.error('SubscriptionService._loadProducts', e, st);
     }
   }
 
@@ -193,6 +214,10 @@ class SubscriptionService extends ChangeNotifier {
     await _stateSub?.cancel();
     _stateSub = null;
 
+    final user = AuthService.instance.currentUser;
+    _attachedUid = user?.uid;
+    _attachedFarmId = user?.isVet == true ? null : user?.activeFarmId;
+
     final ref = _subscriptionDocRef();
     if (ref == null) {
       _state = SubscriptionState.empty();
@@ -220,7 +245,7 @@ class SubscriptionService extends ChangeNotifier {
         notifyListeners();
       },
       onError: (Object e, StackTrace st) {
-        debugPrint('[SubscriptionService._attachStateListener] $e');
+        AppLogger.error('SubscriptionService._attachStateListener', e, st);
       },
     );
   }
@@ -234,7 +259,7 @@ class SubscriptionService extends ChangeNotifier {
     final user = AuthService.instance.currentUser;
     if (user == null) return;
     if (user.isVet) {
-      debugPrint('[SubscriptionService.startTrial] vet için trial yok');
+      AppLogger.info('SubscriptionService.startTrial', 'vet için trial yok');
       return;
     }
     // Farm trial daha önce alındı mı? (per-farm tracking)
@@ -243,7 +268,8 @@ class SubscriptionService extends ChangeNotifier {
     final prefs = await SharedPreferences.getInstance();
     final usedKey = 'farm_trial_used_$farmId';
     if (prefs.getBool(usedKey) ?? false) {
-      debugPrint('[SubscriptionService.startTrial] çiftlik daha önce trial almış');
+      AppLogger.info('SubscriptionService.startTrial',
+          'çiftlik daha önce trial almış');
       return;
     }
 
@@ -307,13 +333,15 @@ class SubscriptionService extends ChangeNotifier {
 
   Future<void> _handlePurchaseUpdates(List<PurchaseDetails> purchases) async {
     for (final purchase in purchases) {
+      bool activated = false;
       switch (purchase.status) {
         case PurchaseStatus.pending:
-          // UI loading state
+          // UI loading state — completePurchase çağırma, mağaza henüz teslim
+          // etmedi.
           break;
         case PurchaseStatus.purchased:
         case PurchaseStatus.restored:
-          await _activatePurchase(purchase);
+          activated = await _activatePurchase(purchase);
           break;
         case PurchaseStatus.error:
           final err = purchase.error;
@@ -328,7 +356,15 @@ class SubscriptionService extends ChangeNotifier {
         case PurchaseStatus.canceled:
           break;
       }
-      if (purchase.pendingCompletePurchase) {
+      // completePurchase **yalnızca** sunucu doğrulaması başarılıysa veya
+      // kullanıcı iptal/error sonucu artık tekrar denemeyecekse çağrılır.
+      // Pending durumunda mağaza henüz son söz vermedi.
+      // Eski mantık: success'te validation FAIL olsa bile complete çağırırdı —
+      // Google bunu "satın alma teslim edildi" sayar, kullanıcı parasını kaybeder.
+      final isTerminal = purchase.status == PurchaseStatus.canceled ||
+          purchase.status == PurchaseStatus.error ||
+          activated;
+      if (purchase.pendingCompletePurchase && isTerminal) {
         await _iap.completePurchase(purchase);
       }
     }
@@ -346,15 +382,18 @@ class SubscriptionService extends ChangeNotifier {
   ///   2. Function Apple/Google'a sorar: "bu satın alma gerçek mi?"
   ///   3. Onaylanırsa Function Firestore'a yazar (serverValidated: true)
   ///   4. Realtime listener Firestore'daki yeni state'i alır → UI günceller
-  Future<void> _activatePurchase(PurchaseDetails purchase) async {
+  /// @returns server validation başarılıysa true (caller `completePurchase`
+  /// tetikler). Hata/exception durumunda false döner; mağaza retry imkanını
+  /// koruyup kullanıcı para kaybetmez.
+  Future<bool> _activatePurchase(PurchaseDetails purchase) async {
     final user = AuthService.instance.currentUser;
-    if (user == null) return;
+    if (user == null) return false;
 
     final plan = _planFromProductId(purchase.productID);
     if (plan == SubscriptionPlan.none) {
       AppLogger.warn('SubscriptionService.activatePurchase',
           'unknown productID: ${purchase.productID}');
-      return;
+      return false;
     }
 
     // Hedef Firestore yolu — vet için user-level, çiftlik için farm-level.
@@ -369,7 +408,7 @@ class SubscriptionService extends ChangeNotifier {
           'No active farm for non-vet purchase', StackTrace.current,
           context: {'productId': purchase.productID});
       lastPurchaseError = 'Aktif çiftlik bulunamadı';
-      return;
+      return false;
     }
 
     try {
@@ -415,11 +454,11 @@ class SubscriptionService extends ChangeNotifier {
         productId: purchase.productID,
         reason: e.code,
       ));
-      return;
+      return false;
     } catch (e, st) {
       AppLogger.error('SubscriptionService.activatePurchase.unknown', e, st);
       lastPurchaseError = 'Beklenmeyen hata: ${e.toString()}';
-      return;
+      return false;
     }
 
     final isYearly = purchase.productID.endsWith('_yearly');
@@ -429,6 +468,7 @@ class SubscriptionService extends ChangeNotifier {
       yearly: isYearly,
     ));
     notifyListeners();
+    return true;
   }
 
   Future<void> _expireSubscription() async {
@@ -471,6 +511,7 @@ class SubscriptionService extends ChangeNotifier {
   void dispose() {
     _purchaseSub?.cancel();
     _stateSub?.cancel();
+    _userSub?.cancel();
     trialExpiredAt.dispose();
     super.dispose();
   }

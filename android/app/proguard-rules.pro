@@ -25,9 +25,14 @@
     @com.google.firebase.firestore.IgnoreExtraProperties <methods>;
 }
 
-# ─── In-App Purchase (BillingClient) ───────────────────────────────────────
+# ─── In-App Purchase (BillingClient + Flutter plugin reflection) ───────────
 -keep class com.android.billingclient.api.** { *; }
 -dontwarn com.android.billingclient.api.**
+-keep class io.flutter.plugins.inapppurchase.** { *; }
+
+# ─── Cloud Functions (callable reflection — JSON serialization) ────────────
+-keep class io.flutter.plugins.firebase.functions.** { *; }
+-dontwarn io.flutter.plugins.firebase.functions.**
 
 # ─── Crashlytics ───────────────────────────────────────────────────────────
 -keepattributes SourceFile,LineNumberTable

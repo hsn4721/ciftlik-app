@@ -59,6 +59,11 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            // Crashlytics mapping upload: `com.google.firebase.crashlytics`
+            // plugin v2.9+ default olarak release build'lerinde mapping.txt'i
+            // Firebase Console'a upload eder — manuel config gerek yok.
+            // (Eğer Codemagic env'inde GoogleService-Info dosyası varsa ve
+            // crashlytics gradle plugin enable ise otomatik çalışır.)
             signingConfig = if (keystorePropertiesFile.exists())
                 signingConfigs.getByName("release")
             else

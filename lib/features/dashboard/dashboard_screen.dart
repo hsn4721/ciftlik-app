@@ -14,6 +14,7 @@ import '../../core/services/invitation_service.dart';
 import '../../core/services/notification_feed_service.dart';
 import '../../core/services/farm_task_service.dart';
 import '../../core/services/leave_request_service.dart';
+import '../../core/services/app_logger.dart';
 import '../../shared/widgets/masked_amount.dart';
 import '../../data/models/invitation_model.dart';
 import '../../data/models/notification_item_model.dart';
@@ -268,7 +269,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           }
         }
       }
-    }, onError: (e) => debugPrint('[dashboard invitation watch] $e'));
+    }, onError: (Object e, StackTrace st) =>
+        AppLogger.error('Dashboard.invitationWatch', e, st));
   }
 
   /// Requester rolü için: talep okunduğunda requester'a "Okundu" bildirimi göster.
@@ -318,7 +320,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           notifId: t.id!.hashCode.abs() % 1000000,
         );
       }
-    }, onError: (e) => debugPrint('[dashboard task assignment watch] $e'));
+    }, onError: (Object e, StackTrace st) =>
+        AppLogger.error('Dashboard.taskAssignmentWatch', e, st));
   }
 
   /// Owner/Assistant için: çiftlikteki bir görev tamamlandığında push + panel bildirimi.
@@ -378,7 +381,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           debugPrint('[dashboard task completion feed] $e');
         }
       }
-    }, onError: (e) => debugPrint('[dashboard task completion watch] $e'));
+    }, onError: (Object e, StackTrace st) =>
+        AppLogger.error('Dashboard.taskCompletionWatch', e, st));
   }
 
   /// Owner/Assistant için: yeni izin talebi geldiğinde push + panel bildirimi.
@@ -433,7 +437,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           debugPrint('[dashboard leave request feed] $e');
         }
       }
-    }, onError: (e) => debugPrint('[dashboard leave request watch] $e'));
+    }, onError: (Object e, StackTrace st) =>
+        AppLogger.error('Dashboard.leaveRequestWatch', e, st));
   }
 
   /// Worker/Vet için: kendi izin talebine cevap geldiğinde push bildirim.
@@ -457,7 +462,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
           notifId: l.id!.hashCode.abs() % 1000000,
         );
       }
-    }, onError: (e) => debugPrint('[dashboard leave response watch] $e'));
+    }, onError: (Object e, StackTrace st) =>
+        AppLogger.error('Dashboard.leaveResponseWatch', e, st));
   }
 
   /// Kullanıcı bilgisini canlı izler.

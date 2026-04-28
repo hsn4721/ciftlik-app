@@ -2,6 +2,18 @@ class AppConstants {
   static const String appName = 'ÇiftlikPRO';
   static const String appVersion = '1.0.0';
 
+  // ─── Yasal URL'ler ───────────────────────────────────────────────────────
+  // Mağaza sayfasında ve in-app linklerde kullanılır. Şu an GitHub Pages
+  // host ediliyor; ciftlikpro.net domain hostinger'a deploy edilince
+  // burada güncellenecek (Play Console + App Store Connect ile aynı kalmalı).
+  static const String privacyPolicyUrl =
+      'https://hsn4721.github.io/ciftlikpro-privacy/';
+  static const String termsOfServiceUrl =
+      'https://hsn4721.github.io/ciftlikpro-privacy/terms.html';
+  static const String supportEmail = 'destek@ciftlikpro.net';
+  static const String accountDeletionUrl =
+      'https://hsn4721.github.io/ciftlikpro-privacy/delete-account.html';
+
   // ─── Test / Geliştirme override'ları ────────────────────────────────────
   // **MAĞAZA YAYININDAN ÖNCE FALSE YAPILMALI**.
   // Sadece debug build'de + bu flag açıkken `testProAllowlistEmails`

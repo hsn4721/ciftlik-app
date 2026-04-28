@@ -26,70 +26,41 @@
 		<string>$(FLUTTER_BUILD_NUMBER)</string>
 		<key>LSRequiresIPhoneOS</key>
 		<true/>
-		<!-- Konum izinleri (hava durumu için) -->
+		<!-- Konum izni — yalnızca uygulama kullanıldığında. `Always` izinleri
+		     kaldırıldı (Apple Guideline 5.1.1(iv): app gerçekten background
+		     location kullanmadıkça istenmemeli). -->
 		<key>NSLocationWhenInUseUsageDescription</key>
 		<string>Konumunuza göre hava durumu bilgisi göstermek için konum iznine ihtiyaç duyulmaktadır.</string>
-		<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-		<string>Konumunuza göre hava durumu bilgisi göstermek için konum iznine ihtiyaç duyulmaktadır.</string>
-		<key>NSLocationAlwaysUsageDescription</key>
-		<string>Konumunuza göre hava durumu bilgisi göstermek için konum iznine ihtiyaç duyulmaktadır.</string>
-		<!-- Bildirim izni -->
+		<!-- Background fetch için arka plan modu (hava durumu sync).
+		     `remote-notification` kaldırıldı — firebase_messaging kullanılmıyor,
+		     yalnızca local notifications var. Bu sayede push entitlement
+		     gereksinimi de düşüyor. -->
 		<key>UIBackgroundModes</key>
 		<array>
 			<string>fetch</string>
-			<string>remote-notification</string>
 		</array>
-		<!-- Kamera ve fotoğraf (ileride hayvan fotoğrafı için) -->
+		<!-- Kamera ve fotoğraf (hayvan fotoğrafı için) -->
 		<key>NSCameraUsageDescription</key>
 		<string>Hayvan fotoğrafı eklemek için kamera iznine ihtiyaç duyulmaktadır.</string>
 		<key>NSPhotoLibraryUsageDescription</key>
 		<string>Hayvan fotoğrafı seçmek için galeri iznine ihtiyaç duyulmaktadır.</string>
-		<!-- App Transport Security — yalnızca HTTPS, sadece Firebase/Google
-		     ve hava durumu için cleartext exception (ileride siteden gelen
-		     resimler için cdn.ciftlikpro.net eklenebilir). -->
+		<key>NSPhotoLibraryAddUsageDescription</key>
+		<string>Çekilen hayvan fotoğraflarını galeriye kaydetmek için izin gerekir.</string>
+		<!-- App Transport Security — HTTPS-only.
+		     NSExceptionDomains kaldırıldı: Firebase/Google domain'leri zaten
+		     HTTPS kullanıyor, exception açıklaması App Review'da soru işareti
+		     yaratıyordu. -->
 		<key>NSAppTransportSecurity</key>
 		<dict>
 			<key>NSAllowsArbitraryLoads</key>
 			<false/>
-			<key>NSExceptionDomains</key>
-			<dict>
-				<key>firebaseio.com</key>
-				<dict>
-					<key>NSIncludesSubdomains</key>
-					<true/>
-					<key>NSExceptionAllowsInsecureHTTPLoads</key>
-					<false/>
-				</dict>
-				<key>googleapis.com</key>
-				<dict>
-					<key>NSIncludesSubdomains</key>
-					<true/>
-					<key>NSExceptionAllowsInsecureHTTPLoads</key>
-					<false/>
-				</dict>
-				<key>firebaseapp.com</key>
-				<dict>
-					<key>NSIncludesSubdomains</key>
-					<true/>
-					<key>NSExceptionAllowsInsecureHTTPLoads</key>
-					<false/>
-				</dict>
-				<key>firebasestorage.app</key>
-				<dict>
-					<key>NSIncludesSubdomains</key>
-					<true/>
-					<key>NSExceptionAllowsInsecureHTTPLoads</key>
-					<false/>
-				</dict>
-			</dict>
 		</dict>
-		<!-- url_launcher için izinli URL şemaları (mailto, tel, https) -->
+		<!-- url_launcher için izinli URL şemaları. https/http kaldırıldı
+		     (default izinli, canOpenURL ile sorgulanmaz). -->
 		<key>LSApplicationQueriesSchemes</key>
 		<array>
 			<string>mailto</string>
 			<string>tel</string>
-			<string>https</string>
-			<string>http</string>
 			<string>itms-apps</string>
 		</array>
 		<!-- Face ID için açıklama (local_auth biyometri) -->
@@ -129,9 +100,6 @@
 		<key>UISupportedInterfaceOrientations~ipad</key>
 		<array>
 			<string>UIInterfaceOrientationPortrait</string>
-			<string>UIInterfaceOrientationPortraitUpsideDown</string>
-			<string>UIInterfaceOrientationLandscapeLeft</string>
-			<string>UIInterfaceOrientationLandscapeRight</string>
 		</array>
 		<key>UIStatusBarHidden</key>
 		<true/>

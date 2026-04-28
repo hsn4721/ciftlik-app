@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:in_app_purchase/in_app_purchase.dart';
+import 'package:url_launcher/url_launcher.dart';
+import '../../core/constants/app_constants.dart';
 import '../../core/design_system/ds.dart';
 import '../../core/services/auth_service.dart';
 import '../../core/subscription/subscription_constants.dart';
@@ -390,8 +392,8 @@ class _PaywallScreenState extends State<PaywallScreen> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      'Yeni kullanıcılar 14 gün ücretsiz Pro Premium denemesi alır. '
-                      'Trial sonu otomatik Aile paketine düşer.',
+                      'Yeni kullanıcılar 14 gün ücretsiz deneme alır. '
+                      'Deneme süresi sonunda seçtiğiniz paket için otomatik tahsilat başlar.',
                       style: DsTypography.bodySmall(color: Colors.white70).copyWith(height: 1.45),
                     ),
                   ),
@@ -399,11 +401,34 @@ class _PaywallScreenState extends State<PaywallScreen> {
               ),
               const SizedBox(height: 16),
 
-              // Footer
+              // IAP otomatik yenileme açıklaması — Apple Guideline 3.1.2(a) +
+              // Play Store consumer protection zorunlu metin (kullanıcı satın
+              // alma butonunun yakınında bunu görmeli).
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.04),
+                  borderRadius: DsRadius.brMd,
+                  border: Border.all(color: Colors.white.withValues(alpha: 0.08)),
+                ),
+                child: Text(
+                  'Abonelik bilgisi: Seçtiğiniz paket otomatik olarak yenilenir. '
+                  'Mevcut dönem bitmeden en az 24 saat önce iptal edilmedikçe, '
+                  'bir sonraki dönem ücreti hesabınızdan tahsil edilir. '
+                  'Aboneliğinizi istediğiniz zaman ${defaultTargetPlatformIsApple ? "App Store" : "Google Play"} '
+                  'hesap ayarlarından yönetebilir veya iptal edebilirsiniz. '
+                  'Ücretsiz deneme süresi içinde iptal ederseniz herhangi bir ücret tahsil edilmez.',
+                  style: DsTypography.caption(color: Colors.white.withValues(alpha: 0.75))
+                      .copyWith(height: 1.45),
+                ),
+              ),
+              const SizedBox(height: 16),
+
+              // Footer — tıklanır Privacy/Terms linkleri
               Center(
                 child: Column(children: [
                   Text(
-                    'Abonelik istediğiniz zaman App Store / Play Store\'dan yönetilebilir',
+                    'Aboneliği istediğiniz zaman App Store / Play Store\'dan yönetebilirsiniz',
                     textAlign: TextAlign.center,
                     style: DsTypography.caption(color: Colors.white.withValues(alpha: 0.5)),
                   ),
@@ -411,12 +436,18 @@ class _PaywallScreenState extends State<PaywallScreen> {
                   Wrap(
                     spacing: 16,
                     children: [
-                      Text('Gizlilik Politikası',
-                          style: DsTypography.caption(color: Colors.white60)
-                              .copyWith(decoration: TextDecoration.underline)),
-                      Text('Kullanım Şartları',
-                          style: DsTypography.caption(color: Colors.white60)
-                              .copyWith(decoration: TextDecoration.underline)),
+                      InkWell(
+                        onTap: () => _openUrl(AppConstants.privacyPolicyUrl),
+                        child: Text('Gizlilik Politikası',
+                            style: DsTypography.caption(color: Colors.white70)
+                                .copyWith(decoration: TextDecoration.underline)),
+                      ),
+                      InkWell(
+                        onTap: () => _openUrl(AppConstants.termsOfServiceUrl),
+                        child: Text('Kullanım Şartları',
+                            style: DsTypography.caption(color: Colors.white70)
+                                .copyWith(decoration: TextDecoration.underline)),
+                      ),
                     ],
                   ),
                 ]),
@@ -785,5 +816,21 @@ class _PaywallScreenState extends State<PaywallScreen> {
         ),
       ]),
     );
+  }
+
+  bool get defaultTargetPlatformIsApple {
+    final p = Theme.of(context).platform;
+    return p == TargetPlatform.iOS || p == TargetPlatform.macOS;
+  }
+
+  Future<void> _openUrl(String url) async {
+    final uri = Uri.parse(url);
+    if (await canLaunchUrl(uri)) {
+      await launchUrl(uri, mode: LaunchMode.externalApplication);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Bağlantı açılamadı: $url')),
+      );
+    }
   }
 }

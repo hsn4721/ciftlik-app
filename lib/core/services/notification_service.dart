@@ -14,22 +14,46 @@ class NotificationService {
     tz.initializeTimeZones();
     tz.setLocalLocation(tz.getLocation('Europe/Istanbul'));
 
+    // Apple HIG: izinleri **just-in-time** iste; uygulama açılır açılmaz
+    // dialog atmak Apple'ın User Acceptance metric'inde düşürür ve kullanıcı
+    // "Don't Allow" derse bildirim akışı kalıcı kapanır. Permission'ları
+    // ilk gerçek schedule sırasında `_ensurePermissions()` ile isteyeceğiz.
     const android = AndroidInitializationSettings('@mipmap/ic_launcher');
     const ios = DarwinInitializationSettings(
-      requestAlertPermission: true,
-      requestBadgePermission: true,
-      requestSoundPermission: true,
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
     );
 
     await _plugin.initialize(
       const InitializationSettings(android: android, iOS: ios),
     );
 
-    await _plugin
-        .resolvePlatformSpecificImplementation<AndroidFlutterLocalNotificationsPlugin>()
-        ?.requestNotificationsPermission();
-
     _initialized = true;
+  }
+
+  /// İlk schedule sırasında çağrılır — Android 13+ POST_NOTIFICATIONS ve
+  /// iOS alert/badge/sound izinlerini ister. Daha önce sorulduysa idempotent.
+  bool _permissionsRequested = false;
+  Future<bool> _ensurePermissions() async {
+    if (_permissionsRequested) return true;
+    _permissionsRequested = true;
+    try {
+      final androidImpl = _plugin.resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>();
+      if (androidImpl != null) {
+        await androidImpl.requestNotificationsPermission();
+      }
+      final iosImpl = _plugin.resolvePlatformSpecificImplementation<
+          IOSFlutterLocalNotificationsPlugin>();
+      if (iosImpl != null) {
+        await iosImpl.requestPermissions(alert: true, badge: true, sound: true);
+      }
+    } catch (_) {
+      // Plugin desteği yoksa veya kullanıcı reddederse sessizce devam — sonraki
+      // schedule denemesinde tekrar denemez (just-in-time, sıkıcı tekrar yok).
+    }
+    return true;
   }
 
   Future<void> scheduleVaccineReminder({
@@ -43,6 +67,7 @@ class NotificationService {
       tz.local,
     );
     if (scheduled.isBefore(tz.TZDateTime.now(tz.local))) return;
+    await _ensurePermissions();
 
     await _plugin.zonedSchedule(
       id,
@@ -67,6 +92,7 @@ class NotificationService {
       tz.local,
     );
     if (scheduled.isBefore(tz.TZDateTime.now(tz.local))) return;
+    await _ensurePermissions();
 
     await _plugin.zonedSchedule(
       id + 10000,
@@ -91,6 +117,7 @@ class NotificationService {
   }) async {
     // Mevcut olasılıkları temizle (re-schedule senaryosunda)
     await cancelPaymentReminder(financeId);
+    await _ensurePermissions();
 
     final now = tz.TZDateTime.now(tz.local);
     final amountStr = amount.toStringAsFixed(2);
@@ -152,6 +179,7 @@ class NotificationService {
             ? '⚠️ Veteriner Talebi'
             : 'Veteriner Talebi';
     final body = '$farmName · $requesterName\n$category · $urgency';
+    await _ensurePermissions();
     await _plugin.show(
       50000 + notifId,
       title,
@@ -166,6 +194,7 @@ class NotificationService {
     required String category,
     required int notifId,
   }) async {
+    await _ensurePermissions();
     await _plugin.show(
       60000 + notifId,
       'Talebiniz okundu',
